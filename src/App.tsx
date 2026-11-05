@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowDownToLine,
   ArrowLeft,
+  Building2,
   CalendarDays,
   Check,
   ChevronRight,
@@ -25,7 +26,7 @@ import {
   Wifi,
   X,
 } from 'lucide-react'
-import type { Employee, NetworkMode, UserRole } from './lib/types'
+import type { Department, Employee, NetworkMode, UserRole } from './lib/types'
 import {
   createRecord,
   formatDate,
@@ -41,8 +42,10 @@ import { supabaseReady } from './lib/supabase'
 
 const DEFAULT_PASSWORD = '00000000'
 
-type View = 'dashboard' | 'attendance' | 'employees' | 'settings'
+type View = 'dashboard' | 'attendance' | 'employees' | 'departments' | 'settings'
 type Session = { role: UserRole; employee?: Employee }
+type NewEmployee = Pick<Employee, 'employeeNo' | 'name' | 'departmentCode' | 'title'>
+type NewDepartment = Pick<Department, 'code' | 'name' | 'manager'>
 
 type Toast = { tone: 'success' | 'error' | 'info'; message: string }
 
@@ -165,22 +168,72 @@ function App() {
   function updateEmployee(id: string, field: keyof Employee, value: string) {
     setData((current) => ({
       ...current,
-      employees: current.employees.map((employee) => employee.id === id ? { ...employee, [field]: value } : employee),
+      employees: current.employees.map((employee) => {
+        if (employee.id !== id) return employee
+        if (field === 'departmentCode') {
+          const department = current.departments.find((item) => item.code === value)
+          return { ...employee, departmentCode: value, department: department?.name ?? employee.department }
+        }
+        return { ...employee, [field]: value }
+      }),
     }))
   }
 
-  function addEmployee() {
-    const number = String(data.employees.length + 1).padStart(3, '0')
+  function addEmployee(input: NewEmployee) {
+    const department = data.departments.find((item) => item.code === input.departmentCode)
     const newEmployee: Employee = {
       id: `emp-${Date.now()}`,
-      employeeNo: `DA${number}`,
-      name: '新進同仁',
-      department: '待設定',
-      title: '待設定',
+      employeeNo: input.employeeNo.trim().toUpperCase(),
+      name: input.name.trim(),
+      department: department?.name ?? '待設定',
+      departmentCode: input.departmentCode,
+      title: input.title.trim(),
       active: true,
+    }
+    if (!newEmployee.employeeNo || !newEmployee.name || !newEmployee.departmentCode) {
+      notify('員工編號、姓名與部門都是必填欄位', 'error')
+      return
+    }
+    if (data.employees.some((employee) => employee.employeeNo === newEmployee.employeeNo)) {
+      notify('這個員工編號已經存在', 'error')
+      return
     }
     setData((current) => ({ ...current, employees: [...current.employees, newEmployee] }))
     notify(`已新增 ${newEmployee.employeeNo}，請直接修改欄位內容`)
+  }
+
+  function addDepartment(input: NewDepartment) {
+    const code = input.code.trim().toUpperCase()
+    const name = input.name.trim()
+    const manager = input.manager.trim()
+    if (!code || !name || !manager) {
+      notify('部門代號、部門名稱與部門主管都是必填欄位', 'error')
+      return
+    }
+    if (data.departments.some((department) => department.code === code || department.name === name)) {
+      notify('部門代號或名稱已經存在', 'error')
+      return
+    }
+    setData((current) => ({
+      ...current,
+      departments: [...current.departments, { id: `dept-${Date.now()}`, code, name, manager, active: true }],
+    }))
+    notify(`已新增 ${code}｜${name}`)
+  }
+
+  function updateDepartment(id: string, field: keyof Department, value: string) {
+    setData((current) => {
+      const existing = current.departments.find((department) => department.id === id)
+      if (!existing) return current
+      const nextValue = field === 'code' ? value.toUpperCase() : value
+      const departments = current.departments.map((department) => department.id === id ? { ...department, [field]: nextValue } : department)
+      const employees = field === 'name' || field === 'code'
+        ? current.employees.map((employee) => employee.departmentCode === existing.code
+          ? { ...employee, departmentCode: field === 'code' ? nextValue : employee.departmentCode, department: field === 'name' ? nextValue : employee.department }
+          : employee)
+        : current.employees
+      return { ...current, departments, employees }
+    })
   }
 
   const filteredRecords = useMemo(() => data.records, [data.records])
@@ -222,6 +275,8 @@ function App() {
       saveNetworkSettings={saveNetworkSettings}
       updateEmployee={updateEmployee}
       addEmployee={addEmployee}
+      addDepartment={addDepartment}
+      updateDepartment={updateDepartment}
       resetDemo={resetDemo}
       toast={toast}
     />
@@ -352,9 +407,9 @@ function PersonalRecords({ records }: { records: DemoData['records'] }) {
 }
 
 function AdminShell(props: {
-  data: DemoData; now: Date; activeView: View; setActiveView: (value: View) => void; mobileNavOpen: boolean; setMobileNavOpen: (value: boolean) => void; logout: () => void; filteredRecords: DemoData['records']; exportAttendance: () => void; networkDraft: string; setNetworkDraft: (value: string) => void; networkModeDraft: NetworkMode; setNetworkModeDraft: (value: NetworkMode) => void; saveNetworkSettings: () => void; updateEmployee: (id: string, field: keyof Employee, value: string) => void; addEmployee: () => void; resetDemo: () => void; toast: Toast | null
+  data: DemoData; now: Date; activeView: View; setActiveView: (value: View) => void; mobileNavOpen: boolean; setMobileNavOpen: (value: boolean) => void; logout: () => void; filteredRecords: DemoData['records']; exportAttendance: () => void; networkDraft: string; setNetworkDraft: (value: string) => void; networkModeDraft: NetworkMode; setNetworkModeDraft: (value: NetworkMode) => void; saveNetworkSettings: () => void; updateEmployee: (id: string, field: keyof Employee, value: string) => void; addEmployee: (input: NewEmployee) => void; addDepartment: (input: NewDepartment) => void; updateDepartment: (id: string, field: keyof Department, value: string) => void; resetDemo: () => void; toast: Toast | null
 }) {
-  const { data, now, activeView, setActiveView, mobileNavOpen, setMobileNavOpen, logout, filteredRecords, exportAttendance, networkDraft, setNetworkDraft, networkModeDraft, setNetworkModeDraft, saveNetworkSettings, updateEmployee, addEmployee, resetDemo, toast } = props
+  const { data, now, activeView, setActiveView, mobileNavOpen, setMobileNavOpen, logout, filteredRecords, exportAttendance, networkDraft, setNetworkDraft, networkModeDraft, setNetworkModeDraft, saveNetworkSettings, updateEmployee, addEmployee, addDepartment, updateDepartment, resetDemo, toast } = props
   const [query, setQuery] = useState('')
   const [dateFilter, setDateFilter] = useState<'today' | 'all'>('today')
   const todayRecords = data.records.filter((record) => isSameDay(record.punchedAt))
@@ -370,6 +425,7 @@ function AdminShell(props: {
     { id: 'dashboard', label: '總覽', icon: SlidersHorizontal },
     { id: 'attendance', label: '刷卡紀錄', icon: CalendarDays },
     { id: 'employees', label: '員工資料', icon: UsersRound },
+    { id: 'departments', label: '部門設定', icon: Building2 },
     { id: 'settings', label: '系統設定', icon: Settings },
   ]
   const viewTitle = navItems.find((item) => item.id === activeView)?.label ?? '總覽'
@@ -381,6 +437,7 @@ function AdminShell(props: {
       {activeView === 'dashboard' && <AdminDashboard data={data} todayRecords={todayRecords} activeEmployees={activeEmployees} checkedEmployeeIds={checkedEmployeeIds} onNavigate={setActiveView} />}
       {activeView === 'attendance' && <AttendanceAdmin data={data} records={visibleRecords} query={query} setQuery={setQuery} dateFilter={dateFilter} setDateFilter={setDateFilter} />}
       {activeView === 'employees' && <EmployeeAdmin data={data} updateEmployee={updateEmployee} addEmployee={addEmployee} />}
+      {activeView === 'departments' && <DepartmentAdmin data={data} addDepartment={addDepartment} updateDepartment={updateDepartment} />}
       {activeView === 'settings' && <SettingsAdmin data={data} networkDraft={networkDraft} setNetworkDraft={setNetworkDraft} networkModeDraft={networkModeDraft} setNetworkModeDraft={setNetworkModeDraft} saveNetworkSettings={saveNetworkSettings} resetDemo={resetDemo} />}
     </main>{toast && <ToastMessage toast={toast} />}</div>
 }
@@ -399,7 +456,35 @@ function MetricCard({ label, value, detail, icon, warning = false }: { label: st
 
 function AttendanceAdmin({ data, records, query, setQuery, dateFilter, setDateFilter }: { data: DemoData; records: DemoData['records']; query: string; setQuery: (value: string) => void; dateFilter: 'today' | 'all'; setDateFilter: (value: 'today' | 'all') => void }) { return <section className="content-card table-card"><div className="filter-bar"><div className="search-field"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜尋姓名、員工編號或部門" /></div><div className="filter-tabs"><button className={dateFilter === 'today' ? 'active' : ''} onClick={() => setDateFilter('today')}>今天</button><button className={dateFilter === 'all' ? 'active' : ''} onClick={() => setDateFilter('all')}>全部紀錄</button></div></div><div className="table-wrap"><table><thead><tr><th>員工</th><th>部門／職稱</th><th>刷卡類型</th><th>刷卡時間</th><th>來源網路</th><th>狀態</th></tr></thead><tbody>{records.length === 0 ? <tr><td colSpan={6}><EmptyState title="找不到符合條件的紀錄" detail="換個關鍵字或日期範圍再試試。" /></td></tr> : records.map((record) => { const employee = data.employees.find((item) => item.id === record.employeeId); return <tr key={record.id}><td><div className="table-person"><div className="avatar tiny">{employee?.name.slice(0, 1)}</div><div><strong>{employee?.name}</strong><small>{employee?.employeeNo}</small></div></div></td><td><div className="cell-stack"><span>{employee?.department}</span><small>{employee?.title}</small></div></td><td><span className={`record-type ${record.type}`}>{record.type === 'check_in' ? '上班' : '下班'}</span></td><td>{formatDateTime(record.punchedAt)}</td><td><div className="network-cell"><Wifi size={14} />{record.networkName}<small>{record.ip}</small></div></td><td><span className="tag success">{record.status === 'accepted' ? '正常' : '人工補登'}</span></td></tr>})}</tbody></table></div><div className="table-footer"><span>共 {records.length} 筆刷卡紀錄</span><span>資料會依伺服器時間建立</span></div></section> }
 
-function EmployeeAdmin({ data, updateEmployee, addEmployee }: { data: DemoData; updateEmployee: (id: string, field: keyof Employee, value: string) => void; addEmployee: () => void }) { return <section className="content-card employee-admin-card"><div className="card-heading"><div><p className="eyebrow">TEAM DIRECTORY</p><h2>員工資料</h2><p className="muted">新員工預設密碼為 00000000，正式串接 Supabase 後可加入首次登入改密碼。</p></div><button className="primary-button" onClick={addEmployee}><Plus size={16} />新增員工</button></div><div className="employee-table-wrap"><table><thead><tr><th>員工編號</th><th>姓名</th><th>部門</th><th>職稱</th><th>狀態</th><th /></tr></thead><tbody>{data.employees.map((employee) => <tr key={employee.id}><td><span className="code-label">{employee.employeeNo}</span></td><td><input className="table-input name-input" value={employee.name} onChange={(event) => updateEmployee(employee.id, 'name', event.target.value)} /></td><td><input className="table-input" value={employee.department} onChange={(event) => updateEmployee(employee.id, 'department', event.target.value)} /></td><td><input className="table-input" value={employee.title} onChange={(event) => updateEmployee(employee.id, 'title', event.target.value)} /></td><td><span className="tag success">啟用中</span></td><td><Pencil size={15} className="muted-icon" /></td></tr>)}</tbody></table></div></section> }
+function EmployeeAdmin({ data, updateEmployee, addEmployee }: { data: DemoData; updateEmployee: (id: string, field: keyof Employee, value: string) => void; addEmployee: (input: NewEmployee) => void }) {
+  const [isAdding, setIsAdding] = useState(false)
+  const [draft, setDraft] = useState<NewEmployee>({ employeeNo: '', name: '', departmentCode: data.departments[0]?.code ?? '', title: '' })
+  const updateDraft = (field: keyof NewEmployee, value: string) => setDraft((current) => ({ ...current, [field]: value }))
+  function submitEmployee(event: React.FormEvent) {
+    event.preventDefault()
+    addEmployee(draft)
+    if (draft.employeeNo && draft.name && draft.departmentCode) {
+      setDraft({ employeeNo: '', name: '', departmentCode: data.departments[0]?.code ?? '', title: '' })
+      setIsAdding(false)
+    }
+  }
+  return <section className="content-card employee-admin-card"><div className="card-heading"><div><p className="eyebrow">TEAM DIRECTORY</p><h2>員工資料</h2><p className="muted">新增時可自行輸入員工編號、姓名與職稱，部門請從已設定的部門選取。</p></div><button className="primary-button" onClick={() => setIsAdding((value) => !value)}>{isAdding ? <X size={16} /> : <Plus size={16} />}{isAdding ? '取消新增' : '新增員工'}</button></div>{isAdding && <form className="employee-add-form" onSubmit={submitEmployee}><label><span>員工編號 *</span><input value={draft.employeeNo} onChange={(event) => updateDraft('employeeNo', event.target.value)} placeholder="例如 DA006" /></label><label><span>姓名 *</span><input value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} placeholder="請輸入姓名" /></label><label><span>部門 *</span><select value={draft.departmentCode} onChange={(event) => updateDraft('departmentCode', event.target.value)}>{data.departments.filter((department) => department.active).map((department) => <option key={department.id} value={department.code}>{department.code}｜{department.name}</option>)}</select></label><label><span>職稱</span><input value={draft.title} onChange={(event) => updateDraft('title', event.target.value)} placeholder="例如 前台接待" /></label><button className="primary-button form-submit" type="submit"><Check size={16} />儲存員工</button></form>}<div className="employee-table-wrap"><table><thead><tr><th>員工編號</th><th>姓名</th><th>部門</th><th>職稱</th><th>狀態</th><th /></tr></thead><tbody>{data.employees.map((employee) => <tr key={employee.id}><td><span className="code-label">{employee.employeeNo}</span></td><td><input className="table-input name-input" value={employee.name} onChange={(event) => updateEmployee(employee.id, 'name', event.target.value)} /></td><td><select className="table-input table-select" value={employee.departmentCode ?? ''} onChange={(event) => updateEmployee(employee.id, 'departmentCode', event.target.value)}>{data.departments.filter((department) => department.active).map((department) => <option key={department.id} value={department.code}>{department.code}｜{department.name}</option>)}</select></td><td><input className="table-input" value={employee.title} onChange={(event) => updateEmployee(employee.id, 'title', event.target.value)} /></td><td><span className="tag success">啟用中</span></td><td><Pencil size={15} className="muted-icon" /></td></tr>)}</tbody></table></div></section>
+}
+
+function DepartmentAdmin({ data, addDepartment, updateDepartment }: { data: DemoData; addDepartment: (input: NewDepartment) => void; updateDepartment: (id: string, field: keyof Department, value: string) => void }) {
+  const [isAdding, setIsAdding] = useState(false)
+  const [draft, setDraft] = useState<NewDepartment>({ code: '', name: '', manager: '' })
+  const updateDraft = (field: keyof NewDepartment, value: string) => setDraft((current) => ({ ...current, [field]: value }))
+  function submitDepartment(event: React.FormEvent) {
+    event.preventDefault()
+    addDepartment(draft)
+    if (draft.code && draft.name && draft.manager) {
+      setDraft({ code: '', name: '', manager: '' })
+      setIsAdding(false)
+    }
+  }
+  return <section className="content-card employee-admin-card"><div className="card-heading"><div><p className="eyebrow">DEPARTMENT DIRECTORY</p><h2>部門設定</h2><p className="muted">新增或異動部門代號、部門名稱與部門主管；員工資料會同步使用這份部門清單。</p></div><button className="primary-button" onClick={() => setIsAdding((value) => !value)}>{isAdding ? <X size={16} /> : <Plus size={16} />}{isAdding ? '取消新增' : '新增部門'}</button></div>{isAdding && <form className="employee-add-form department-add-form" onSubmit={submitDepartment}><label><span>部門代號 *</span><input value={draft.code} onChange={(event) => updateDraft('code', event.target.value)} placeholder="例如 FO" /></label><label><span>部門名稱 *</span><input value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} placeholder="例如 客務部" /></label><label><span>部門主管 *</span><input value={draft.manager} onChange={(event) => updateDraft('manager', event.target.value)} placeholder="例如 王經理" /></label><button className="primary-button form-submit" type="submit"><Check size={16} />儲存部門</button></form>}<div className="employee-table-wrap"><table><thead><tr><th>部門代號</th><th>部門名稱</th><th>部門主管</th><th>狀態</th><th /></tr></thead><tbody>{data.departments.map((department) => <tr key={department.id}><td><input className="table-input code-input" value={department.code} onChange={(event) => updateDepartment(department.id, 'code', event.target.value)} /></td><td><input className="table-input name-input" value={department.name} onChange={(event) => updateDepartment(department.id, 'name', event.target.value)} /></td><td><input className="table-input" value={department.manager} onChange={(event) => updateDepartment(department.id, 'manager', event.target.value)} /></td><td><span className="tag success">啟用中</span></td><td><Pencil size={15} className="muted-icon" /></td></tr>)}</tbody></table></div></section>
+}
 
 function SettingsAdmin({ data, networkDraft, setNetworkDraft, networkModeDraft, setNetworkModeDraft, saveNetworkSettings, resetDemo }: { data: DemoData; networkDraft: string; setNetworkDraft: (value: string) => void; networkModeDraft: NetworkMode; setNetworkModeDraft: (value: NetworkMode) => void; saveNetworkSettings: () => void; resetDemo: () => void }) { return <div className="settings-grid"><section className="content-card settings-card"><div className="card-heading"><div><p className="eyebrow">NETWORK ACCESS</p><h2>公司網路限制</h2><p className="muted">正式串接後，打卡請求會由伺服器檢查來源公網 IP，不信任瀏覽器自行傳入的 IP。</p></div><div className={`large-status ${networkModeDraft === 'test' ? 'test' : 'strict'}`}>{networkModeDraft === 'test' ? <CircleAlert size={20} /> : <ShieldCheck size={20} />}<span>{networkModeDraft === 'test' ? '測試模式' : '正式模式'}</span></div></div><div className="mode-choice"><button className={networkModeDraft === 'test' ? 'selected' : ''} onClick={() => setNetworkModeDraft('test')}><div className="choice-radio" /><div><strong>測試模式</strong><small>暫不限制 IP，方便目前畫面與流程調校。</small></div></button><button className={networkModeDraft === 'strict' ? 'selected' : ''} onClick={() => setNetworkModeDraft('strict')}><div className="choice-radio" /><div><strong>正式 IP 模式</strong><small>只允許下方列出的公司固定公網 IP 打卡。</small></div></button></div><label className="settings-label"><span>允許的固定公網 IP</span><textarea rows={4} value={networkDraft} onChange={(event) => setNetworkDraft(event.target.value)} placeholder="例如：203.0.113.25\n每行一組 IP，也可用逗號分隔" /></label><div className="settings-hint"><Globe2 size={17} /><div><strong>目前儲存狀態</strong><span>{data.network.allowedIps.length ? `已設定 ${data.network.allowedIps.length} 組 IP · 最近更新 ${formatDateTime(data.network.updatedAt)}` : '尚未設定正式 IP。系統目前不會擋下預覽刷卡。'}</span></div></div><div className="form-actions"><button className="primary-button" onClick={saveNetworkSettings}><Check size={16} />儲存網路設定</button></div></section><section className="content-card settings-card secondary-settings"><div className="card-heading"><div><p className="eyebrow">SUPABASE CONNECTION</p><h2>資料服務狀態</h2></div><div className={`connection-dot ${supabaseReady ? 'ready' : ''}`} /></div><div className="connection-row"><span>前端連線</span><strong>{supabaseReady ? '已偵測環境變數' : '尚未設定 Supabase Key'}</strong></div><div className="connection-row"><span>目前資料層</span><strong>{supabaseReady ? 'Supabase client' : '瀏覽器預覽資料'}</strong></div><p className="settings-copy">此預覽版本先用瀏覽器儲存資料，讓你可以調校畫面。正式上線前，會將員工、網路設定與刷卡紀錄移到 Supabase，並由 Edge Function 執行 IP 檢查。</p><button className="danger-button" onClick={resetDemo}><X size={15} />重設預覽資料</button></section></div> }
 

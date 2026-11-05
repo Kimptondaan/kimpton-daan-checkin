@@ -7,7 +7,16 @@ export interface Employee {
   employeeNo: string
   name: string
   department: string
+  departmentCode?: string
   title: string
+  active: boolean
+}
+
+export interface Department {
+  id: string
+  code: string
+  name: string
+  manager: string
   active: boolean
 }
 
@@ -29,6 +38,7 @@ export interface NetworkSettings {
 
 export interface DemoData {
   employees: Employee[]
+  departments: Department[]
   records: AttendanceRecord[]
   network: NetworkSettings
 }

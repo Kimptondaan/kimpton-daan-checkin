@@ -1,4 +1,4 @@
-import type { AttendanceRecord, DemoData, Employee, NetworkSettings } from './types'
+import type { AttendanceRecord, Department, DemoData, Employee, NetworkSettings } from './types'
 
 const STORAGE_KEY = 'daan-kimpton-attendance-demo-v1'
 
@@ -9,11 +9,19 @@ const todayAt = (hour: number, minute: number) => {
 }
 
 const seedEmployees: Employee[] = [
-  { id: 'emp-001', employeeNo: 'DA001', name: '林芷安', department: '客務部', title: '前台接待', active: true },
-  { id: 'emp-002', employeeNo: 'DA002', name: '陳柏宇', department: '房務部', title: '房務主任', active: true },
-  { id: 'emp-003', employeeNo: 'DA003', name: '黃詠晴', department: '餐飲部', title: '餐飲服務', active: true },
-  { id: 'emp-004', employeeNo: 'DA004', name: '王昱翔', department: '工程部', title: '設備技師', active: true },
-  { id: 'emp-005', employeeNo: 'DA005', name: '許雅雯', department: '管理部', title: '人資專員', active: true },
+  { id: 'emp-001', employeeNo: 'DA001', name: '林芷安', department: '客務部', departmentCode: 'FO', title: '前台接待', active: true },
+  { id: 'emp-002', employeeNo: 'DA002', name: '陳柏宇', department: '房務部', departmentCode: 'HK', title: '房務主任', active: true },
+  { id: 'emp-003', employeeNo: 'DA003', name: '黃詠晴', department: '餐飲部', departmentCode: 'FB', title: '餐飲服務', active: true },
+  { id: 'emp-004', employeeNo: 'DA004', name: '王昱翔', department: '工程部', departmentCode: 'EN', title: '設備技師', active: true },
+  { id: 'emp-005', employeeNo: 'DA005', name: '許雅雯', department: '管理部', departmentCode: 'AD', title: '人資專員', active: true },
+]
+
+const seedDepartments: Department[] = [
+  { id: 'dept-001', code: 'FO', name: '客務部', manager: '林經理', active: true },
+  { id: 'dept-002', code: 'HK', name: '房務部', manager: '陳經理', active: true },
+  { id: 'dept-003', code: 'FB', name: '餐飲部', manager: '黃經理', active: true },
+  { id: 'dept-004', code: 'EN', name: '工程部', manager: '王經理', active: true },
+  { id: 'dept-005', code: 'AD', name: '管理部', manager: '許經理', active: true },
 ]
 
 const seedRecords: AttendanceRecord[] = [
@@ -25,6 +33,7 @@ const seedRecords: AttendanceRecord[] = [
 
 const defaultData: DemoData = {
   employees: seedEmployees,
+  departments: seedDepartments,
   records: seedRecords,
   network: { mode: 'test', allowedIps: [], updatedAt: new Date().toISOString() },
 }
@@ -33,10 +42,24 @@ function cloneDefault(): DemoData {
   return JSON.parse(JSON.stringify(defaultData)) as DemoData
 }
 
+function normalizeData(value: Partial<DemoData>): DemoData {
+  const departments = value.departments?.length ? value.departments : cloneDefault().departments
+  const employees = (value.employees ?? cloneDefault().employees).map((employee) => ({
+    ...employee,
+    departmentCode: employee.departmentCode ?? departments.find((department) => department.name === employee.department)?.code ?? departments[0]?.code ?? '',
+  }))
+  return {
+    employees,
+    departments,
+    records: value.records ?? cloneDefault().records,
+    network: value.network ?? cloneDefault().network,
+  }
+}
+
 export function loadDemoData(): DemoData {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored) return JSON.parse(stored) as DemoData
+    if (stored) return normalizeData(JSON.parse(stored) as Partial<DemoData>)
   } catch {
     // Preview may block storage in an embedded context; use in-memory defaults.
   }
@@ -119,4 +142,4 @@ export function toCsv(records: AttendanceRecord[], employees: Employee[]) {
     .join('\n')
 }
 
-export type { DemoData, Employee, NetworkSettings }
+export type { Department, DemoData, Employee, NetworkSettings }
