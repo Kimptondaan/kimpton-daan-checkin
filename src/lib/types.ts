@@ -10,6 +10,7 @@ export interface Employee {
   departmentCode?: string
   title: string
   active: boolean
+  password?: string
 }
 
 export interface Department {
@@ -39,6 +40,7 @@ export interface NetworkSettings {
 export interface DemoData {
   employees: Employee[]
   departments: Department[]
+  adminPassword: string
   records: AttendanceRecord[]
   network: NetworkSettings
 }

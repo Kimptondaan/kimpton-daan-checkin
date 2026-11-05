@@ -194,6 +194,13 @@ td { color: var(--ink); font-size: 11px; white-space: nowrap; }
 .table-input:focus { border-color: var(--copper); }
 .name-input { font-weight: 600; }
 .muted-icon { color: #aaa69e; }
+.table-action-button { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 2px; color: var(--green); background: transparent; padding: 6px 8px; font-size: 10px; white-space: nowrap; }
+.table-action-button:hover, .table-action-button.save { border-color: var(--copper); background: #fcf5ee; }
+.row-actions { display: flex; gap: 6px; }
+.inline-password { display: flex; gap: 5px; margin-top: 7px; }
+.inline-password input { width: 105px; border: 1px solid var(--line); outline: 0; padding: 6px; background: #fffdf9; font-size: 10px; }
+.inline-password input:focus { border-color: var(--copper); }
+.small-save { border: 0; color: #fff; background: var(--green); padding: 5px 7px; font-size: 10px; }
 .settings-grid { max-width: 1250px; display: grid; grid-template-columns: 1.3fr .8fr; gap: 16px; margin: 42px auto 0; }
 .settings-card { padding: 28px; }
 .settings-card .card-heading { align-items: flex-start; }
@@ -211,6 +218,10 @@ td { color: var(--ink); font-size: 11px; white-space: nowrap; }
 .settings-label { margin-top: 5px; }
 .settings-label textarea { resize: vertical; min-height: 88px; border: 1px solid var(--line); outline: 0; padding: 12px; background: #fbf9f5; color: var(--ink); font-size: 12px; line-height: 1.8; }
 .settings-label textarea:focus { border-color: var(--copper); }
+.settings-password-input { border: 1px solid var(--line); outline: 0; padding: 11px 12px; background: #fbf9f5; color: var(--ink); font-size: 12px; }
+.settings-password-input:focus { border-color: var(--copper); }
+.settings-save-button { margin-top: 14px; }
+.connection-heading { margin-top: 35px; padding-top: 25px; border-top: 1px solid var(--line); }
 .settings-hint { display: flex; gap: 9px; align-items: flex-start; margin-top: 17px; color: var(--copper); }
 .settings-hint strong, .settings-hint span { display: block; }
 .settings-hint strong { color: var(--green); font-size: 11px; }

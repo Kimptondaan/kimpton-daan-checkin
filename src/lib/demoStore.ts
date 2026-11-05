@@ -1,6 +1,7 @@
 import type { AttendanceRecord, Department, DemoData, Employee, NetworkSettings } from './types'
 
 const STORAGE_KEY = 'daan-kimpton-attendance-demo-v1'
+const DEFAULT_PASSWORD = '00000000'
 
 const todayAt = (hour: number, minute: number) => {
   const value = new Date()
@@ -9,11 +10,11 @@ const todayAt = (hour: number, minute: number) => {
 }
 
 const seedEmployees: Employee[] = [
-  { id: 'emp-001', employeeNo: 'DA001', name: '林芷安', department: '客務部', departmentCode: 'FO', title: '前台接待', active: true },
-  { id: 'emp-002', employeeNo: 'DA002', name: '陳柏宇', department: '房務部', departmentCode: 'HK', title: '房務主任', active: true },
-  { id: 'emp-003', employeeNo: 'DA003', name: '黃詠晴', department: '餐飲部', departmentCode: 'FB', title: '餐飲服務', active: true },
-  { id: 'emp-004', employeeNo: 'DA004', name: '王昱翔', department: '工程部', departmentCode: 'EN', title: '設備技師', active: true },
-  { id: 'emp-005', employeeNo: 'DA005', name: '許雅雯', department: '管理部', departmentCode: 'AD', title: '人資專員', active: true },
+  { id: 'emp-001', employeeNo: 'DA001', name: '林芷安', department: '客務部', departmentCode: 'FO', title: '前台接待', active: true, password: DEFAULT_PASSWORD },
+  { id: 'emp-002', employeeNo: 'DA002', name: '陳柏宇', department: '房務部', departmentCode: 'HK', title: '房務主任', active: true, password: DEFAULT_PASSWORD },
+  { id: 'emp-003', employeeNo: 'DA003', name: '黃詠晴', department: '餐飲部', departmentCode: 'FB', title: '餐飲服務', active: true, password: DEFAULT_PASSWORD },
+  { id: 'emp-004', employeeNo: 'DA004', name: '王昱翔', department: '工程部', departmentCode: 'EN', title: '設備技師', active: true, password: DEFAULT_PASSWORD },
+  { id: 'emp-005', employeeNo: 'DA005', name: '許雅雯', department: '管理部', departmentCode: 'AD', title: '人資專員', active: true, password: DEFAULT_PASSWORD },
 ]
 
 const seedDepartments: Department[] = [
@@ -34,6 +35,7 @@ const seedRecords: AttendanceRecord[] = [
 const defaultData: DemoData = {
   employees: seedEmployees,
   departments: seedDepartments,
+  adminPassword: DEFAULT_PASSWORD,
   records: seedRecords,
   network: { mode: 'test', allowedIps: [], updatedAt: new Date().toISOString() },
 }
@@ -46,11 +48,13 @@ function normalizeData(value: Partial<DemoData>): DemoData {
   const departments = value.departments?.length ? value.departments : cloneDefault().departments
   const employees = (value.employees ?? cloneDefault().employees).map((employee) => ({
     ...employee,
+    password: employee.password ?? DEFAULT_PASSWORD,
     departmentCode: employee.departmentCode ?? departments.find((department) => department.name === employee.department)?.code ?? departments[0]?.code ?? '',
   }))
   return {
     employees,
     departments,
+    adminPassword: value.adminPassword ?? DEFAULT_PASSWORD,
     records: value.records ?? cloneDefault().records,
     network: value.network ?? cloneDefault().network,
   }
