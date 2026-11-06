@@ -44,7 +44,7 @@ const DEFAULT_PASSWORD = '00000000'
 
 type View = 'dashboard' | 'attendance' | 'employees' | 'departments' | 'settings'
 type Session = { role: UserRole; employee?: Employee }
-type NewEmployee = Pick<Employee, 'employeeNo' | 'name' | 'departmentCode' | 'title'>
+type NewEmployee = Pick<Employee, 'employeeNo' | 'name' | 'departmentCode' | 'title' | 'accessRole'>
 type NewDepartment = Pick<Department, 'code' | 'name' | 'manager'>
 
 type Toast = { tone: 'success' | 'error' | 'info'; message: string }
@@ -106,7 +106,7 @@ function App() {
       notify('員工密碼不正確，請洽管理者重設', 'error')
       return
     }
-    setSession({ role: 'employee', employee })
+    setSession({ role: employee.accessRole ?? 'employee', employee })
     setActiveView('dashboard')
     notify(`早安，${employee.name}，今天也辛苦了`, 'success')
   }
@@ -119,21 +119,13 @@ function App() {
 
   function handlePunch(type: 'check_in' | 'check_out') {
     if (!session?.employee) return
-    const alreadyPunched = data.records.some(
-      (record) => record.employeeId === session.employee?.id && record.type === type && isSameDay(record.punchedAt),
-    )
-    if (alreadyPunched) {
-      notify(type === 'check_in' ? '今天已完成上班刷卡' : '今天已完成下班刷卡', 'info')
-      return
-    }
-
     const record = createRecord(session.employee.id, type, data.network)
     setData((current) => ({ ...current, records: [record, ...current.records] }))
-    notify(type === 'check_in' ? '上班刷卡完成，祝你工作順利' : '下班刷卡完成，晚點好好休息')
+    notify(type === 'check_in' ? '上班刷卡完成，可再次刷卡補留時間' : '下班刷卡完成，可再次刷卡補留時間')
   }
 
-  function exportAttendance() {
-    const csv = toCsv(filteredRecords, data.employees)
+  function exportAttendance(records: DemoData['records'] = filteredRecords) {
+    const csv = toCsv(records, data.employees)
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -192,6 +184,7 @@ function App() {
       departmentCode: input.departmentCode,
       title: input.title.trim(),
       password: DEFAULT_PASSWORD,
+      accessRole: input.accessRole ?? 'employee',
       active: true,
     }
     if (!newEmployee.employeeNo || !newEmployee.name || !newEmployee.departmentCode) {
@@ -279,6 +272,8 @@ function App() {
   return (
     <AdminShell
       data={data}
+      accessRole={session.role}
+      scopeDepartmentCode={session.employee?.departmentCode}
       now={now}
       activeView={activeView}
       setActiveView={setActiveView}
@@ -408,13 +403,13 @@ function EmployeeDashboard({ employee, data, now, didCheckIn, didCheckOut, handl
         <div className="hero-date"><span>{now.toLocaleDateString('zh-TW', { month: 'long', day: 'numeric' })}</span><strong>{now.toLocaleDateString('zh-TW', { weekday: 'long' })}</strong></div>
       </section>
       <section className="punch-grid">
-        <button className={`punch-card check-in ${didCheckIn ? 'done' : ''}`} onClick={() => handlePunch('check_in')} disabled={didCheckIn}>
+        <button className={`punch-card check-in ${didCheckIn ? 'done' : ''}`} onClick={() => handlePunch('check_in')}>
           <div className="punch-card-top"><span className="punch-index">01</span><span className="punch-state">{didCheckIn ? '已完成' : '尚未刷卡'}</span></div>
-          <div className="punch-icon"><ArrowDownToLine size={25} /></div><h3>上班刷卡</h3><p>{checkIn ? formatDateTime(checkIn.punchedAt) : '記錄你的到班時間'}</p><span className="punch-action">{didCheckIn ? '今天已完成' : '現在刷卡'} <ChevronRight size={17} /></span>
+          <div className="punch-icon"><ArrowDownToLine size={25} /></div><h3>上班刷卡</h3><p>{checkIn ? `最近一次 ${formatDateTime(checkIn.punchedAt)}` : '記錄你的到班時間'}</p><span className="punch-action">再次刷卡 <ChevronRight size={17} /></span>
         </button>
-        <button className={`punch-card check-out ${didCheckOut ? 'done' : ''}`} onClick={() => handlePunch('check_out')} disabled={didCheckOut}>
+        <button className={`punch-card check-out ${didCheckOut ? 'done' : ''}`} onClick={() => handlePunch('check_out')}>
           <div className="punch-card-top"><span className="punch-index">02</span><span className="punch-state">{didCheckOut ? '已完成' : '尚未刷卡'}</span></div>
-          <div className="punch-icon"><ArrowLeft size={25} /></div><h3>下班刷卡</h3><p>{checkOut ? formatDateTime(checkOut.punchedAt) : '結束班次時記得刷卡'}</p><span className="punch-action">{didCheckOut ? '今天已完成' : '現在刷卡'} <ChevronRight size={17} /></span>
+          <div className="punch-icon"><ArrowLeft size={25} /></div><h3>下班刷卡</h3><p>{checkOut ? `最近一次 ${formatDateTime(checkOut.punchedAt)}` : '結束班次時記得刷卡'}</p><span className="punch-action">再次刷卡 <ChevronRight size={17} /></span>
         </button>
       </section>
       <section className="employee-status-row"><div className="section-label">TODAY AT A GLANCE</div><div className="status-list"><div><span className={didCheckIn ? 'mini-status done' : 'mini-status'}>{didCheckIn ? <Check size={14} /> : '—'}</span><span>上班時間</span><strong>{checkIn ? new Date(checkIn.punchedAt).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }) : '待刷卡'}</strong></div><div><span className={didCheckOut ? 'mini-status done' : 'mini-status'}>{didCheckOut ? <Check size={14} /> : '—'}</span><span>下班時間</span><strong>{checkOut ? new Date(checkOut.punchedAt).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }) : '待刷卡'}</strong></div><div><span className="mini-status location"><Wifi size={14} /></span><span>網路狀態</span><strong>測試模式</strong></div></div></section>
@@ -427,33 +422,40 @@ function PersonalRecords({ records }: { records: DemoData['records'] }) {
 }
 
 function AdminShell(props: {
-  data: DemoData; now: Date; activeView: View; setActiveView: (value: View) => void; mobileNavOpen: boolean; setMobileNavOpen: (value: boolean) => void; logout: () => void; filteredRecords: DemoData['records']; exportAttendance: () => void; networkDraft: string; setNetworkDraft: (value: string) => void; networkModeDraft: NetworkMode; setNetworkModeDraft: (value: NetworkMode) => void; saveNetworkSettings: () => void; updateEmployee: (id: string, field: keyof Employee, value: string) => void; addEmployee: (input: NewEmployee) => void; addDepartment: (input: NewDepartment) => void; updateDepartment: (id: string, field: keyof Department, value: string) => void; updatePassword: (accountId: string, password: string) => boolean; resetDemo: () => void; toast: Toast | null
+  data: DemoData; accessRole: UserRole; scopeDepartmentCode?: string; now: Date; activeView: View; setActiveView: (value: View) => void; mobileNavOpen: boolean; setMobileNavOpen: (value: boolean) => void; logout: () => void; filteredRecords: DemoData['records']; exportAttendance: (records?: DemoData['records']) => void; networkDraft: string; setNetworkDraft: (value: string) => void; networkModeDraft: NetworkMode; setNetworkModeDraft: (value: NetworkMode) => void; saveNetworkSettings: () => void; updateEmployee: (id: string, field: keyof Employee, value: string) => void; addEmployee: (input: NewEmployee) => void; addDepartment: (input: NewDepartment) => void; updateDepartment: (id: string, field: keyof Department, value: string) => void; updatePassword: (accountId: string, password: string) => boolean; resetDemo: () => void; toast: Toast | null
 }) {
-  const { data, now, activeView, setActiveView, mobileNavOpen, setMobileNavOpen, logout, filteredRecords, exportAttendance, networkDraft, setNetworkDraft, networkModeDraft, setNetworkModeDraft, saveNetworkSettings, updateEmployee, addEmployee, addDepartment, updateDepartment, updatePassword, resetDemo, toast } = props
+  const { data, accessRole, scopeDepartmentCode, now, activeView, setActiveView, mobileNavOpen, setMobileNavOpen, logout, filteredRecords, exportAttendance, networkDraft, setNetworkDraft, networkModeDraft, setNetworkModeDraft, saveNetworkSettings, updateEmployee, addEmployee, addDepartment, updateDepartment, updatePassword, resetDemo, toast } = props
   const [query, setQuery] = useState('')
   const [dateFilter, setDateFilter] = useState<'today' | 'all'>('today')
-  const todayRecords = data.records.filter((record) => isSameDay(record.punchedAt))
-  const visibleRecords = data.records.filter((record) => {
+  const scopedEmployees = data.employees.filter((employee) => accessRole !== 'manager' || employee.departmentCode === scopeDepartmentCode)
+  const scopedEmployeeIds = new Set(scopedEmployees.map((employee) => employee.id))
+  const todayRecords = data.records.filter((record) => isSameDay(record.punchedAt) && scopedEmployeeIds.has(record.employeeId))
+  const scopedRecords = data.records.filter((record) => {
+    if (accessRole === 'admin' || accessRole === 'hr') return true
+    const employee = data.employees.find((item) => item.id === record.employeeId)
+    return accessRole === 'manager' && employee?.departmentCode === scopeDepartmentCode
+  })
+  const visibleRecords = scopedRecords.filter((record) => {
     const employee = data.employees.find((item) => item.id === record.employeeId)
     const matchesQuery = !query || [employee?.employeeNo, employee?.name, employee?.department].some((value) => value?.toLowerCase().includes(query.toLowerCase()))
     const matchesDate = dateFilter === 'all' || isSameDay(record.punchedAt)
     return matchesQuery && matchesDate
   })
-  const activeEmployees = data.employees.filter((employee) => employee.active)
+  const activeEmployees = scopedEmployees.filter((employee) => employee.active)
   const checkedEmployeeIds = new Set(todayRecords.map((record) => record.employeeId))
-  const navItems: { id: View; label: string; icon: typeof Clock3 }[] = [
+  const navItems = ([
     { id: 'dashboard', label: '總覽', icon: SlidersHorizontal },
     { id: 'attendance', label: '刷卡紀錄', icon: CalendarDays },
     { id: 'employees', label: '員工資料', icon: UsersRound },
     { id: 'departments', label: '部門設定', icon: Building2 },
     { id: 'settings', label: '系統設定', icon: Settings },
-  ]
+  ] as { id: View; label: string; icon: typeof Clock3 }[]).filter((item) => accessRole === 'admin' || item.id === 'dashboard' || item.id === 'attendance')
   const viewTitle = navItems.find((item) => item.id === activeView)?.label ?? '總覽'
 
   return <div className="admin-app">
     <header className="admin-mobile-topbar"><button className="icon-button" onClick={() => setMobileNavOpen(!mobileNavOpen)} aria-label="開啟選單"><Menu size={20} /></button><div className="brand-inline"><div className="brand-mark small">K</div><span>管理者後台</span></div><button className="icon-button" onClick={logout} aria-label="登出"><LogOut size={18} /></button></header>
     <aside className={`admin-sidebar ${mobileNavOpen ? 'open' : ''}`}><div className="sidebar-brand"><div className="brand-mark">K</div><div><p>DAAN KIMPTON</p><strong>員工刷卡系統</strong></div></div><div className="sidebar-meta"><span className="eyebrow">ADMIN CONSOLE</span><span className="status-pill small-pill"><span className="status-dot" />{data.network.mode === 'test' ? '測試模式' : '正式模式'}</span></div><nav className="sidebar-nav">{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={activeView === id ? 'active' : ''} onClick={() => { setActiveView(id); setMobileNavOpen(false) }}><Icon size={18} /><span>{label}</span>{activeView === id && <ChevronRight size={15} className="nav-arrow" />}</button>)}</nav><div className="sidebar-bottom"><div className="admin-profile"><div className="avatar admin-avatar">A</div><div><strong>管理者</strong><small>系統管理員</small></div></div><button className="sidebar-logout" onClick={logout}><LogOut size={17} />登出</button></div></aside>
-    <main className="admin-main"><div className="admin-heading"><div><p className="eyebrow">{activeView === 'dashboard' ? 'AT A GLANCE' : 'ADMIN CONSOLE'}</p><h1>{viewTitle}</h1><p className="muted">{formatDate(now.toISOString())} · 最後更新 {now.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })}</p></div><div className="heading-actions"><div className="network-summary"><span className="status-dot" />{data.network.mode === 'test' ? '測試模式' : 'IP 限制已啟用'}</div>{activeView === 'attendance' && <button className="secondary-button" onClick={exportAttendance}><Download size={16} />匯出 CSV</button>}</div></div>
+    <main className="admin-main"><div className="admin-heading"><div><p className="eyebrow">{activeView === 'dashboard' ? 'AT A GLANCE' : 'ADMIN CONSOLE'}</p><h1>{viewTitle}</h1><p className="muted">{formatDate(now.toISOString())} · 最後更新 {now.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })}</p></div><div className="heading-actions"><div className="network-summary"><span className="status-dot" />{data.network.mode === 'test' ? '測試模式' : 'IP 限制已啟用'}</div>{activeView === 'attendance' && <button className="secondary-button" onClick={() => exportAttendance(visibleRecords)}><Download size={16} />匯出 CSV</button>}</div></div>
       {activeView === 'dashboard' && <AdminDashboard data={data} todayRecords={todayRecords} activeEmployees={activeEmployees} checkedEmployeeIds={checkedEmployeeIds} onNavigate={setActiveView} />}
       {activeView === 'attendance' && <AttendanceAdmin data={data} records={visibleRecords} query={query} setQuery={setQuery} dateFilter={dateFilter} setDateFilter={setDateFilter} />}
       {activeView === 'employees' && <EmployeeAdmin data={data} updateEmployee={updateEmployee} addEmployee={addEmployee} updatePassword={updatePassword} />}
@@ -480,17 +482,17 @@ function EmployeeAdmin({ data, updateEmployee, addEmployee, updatePassword }: { 
   const [isAdding, setIsAdding] = useState(false)
   const [passwordEmployeeId, setPasswordEmployeeId] = useState<string | null>(null)
   const [passwordDraft, setPasswordDraft] = useState('')
-  const [draft, setDraft] = useState<NewEmployee>({ employeeNo: '', name: '', departmentCode: data.departments[0]?.code ?? '', title: '' })
+  const [draft, setDraft] = useState<NewEmployee>({ employeeNo: '', name: '', departmentCode: data.departments[0]?.code ?? '', title: '', accessRole: 'employee' })
   const updateDraft = (field: keyof NewEmployee, value: string) => setDraft((current) => ({ ...current, [field]: value }))
   function submitEmployee(event: React.FormEvent) {
     event.preventDefault()
     addEmployee(draft)
     if (draft.employeeNo && draft.name && draft.departmentCode) {
-      setDraft({ employeeNo: '', name: '', departmentCode: data.departments[0]?.code ?? '', title: '' })
+      setDraft({ employeeNo: '', name: '', departmentCode: data.departments[0]?.code ?? '', title: '', accessRole: 'employee' })
       setIsAdding(false)
     }
   }
-  return <section className="content-card employee-admin-card"><div className="card-heading"><div><p className="eyebrow">TEAM DIRECTORY</p><h2>員工資料</h2><p className="muted">新增時可自行輸入員工編號、姓名與職稱，部門請從已設定的部門選取。</p></div><button className="primary-button" onClick={() => setIsAdding((value) => !value)}>{isAdding ? <X size={16} /> : <Plus size={16} />}{isAdding ? '取消新增' : '新增員工'}</button></div>{isAdding && <form className="employee-add-form" onSubmit={submitEmployee}><label><span>員工編號 *</span><input value={draft.employeeNo} onChange={(event) => updateDraft('employeeNo', event.target.value)} placeholder="例如 DA006" /></label><label><span>姓名 *</span><input value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} placeholder="請輸入姓名" /></label><label><span>部門 *</span><select value={draft.departmentCode} onChange={(event) => updateDraft('departmentCode', event.target.value)}>{data.departments.filter((department) => department.active).map((department) => <option key={department.id} value={department.code}>{department.code}｜{department.name}</option>)}</select></label><label><span>職稱</span><input value={draft.title} onChange={(event) => updateDraft('title', event.target.value)} placeholder="例如 前台接待" /></label><button className="primary-button form-submit" type="submit"><Check size={16} />儲存員工</button></form>}<div className="employee-table-wrap"><table><thead><tr><th>員工編號</th><th>姓名</th><th>部門</th><th>職稱</th><th>狀態</th><th>帳號操作</th></tr></thead><tbody>{data.employees.map((employee) => <tr key={employee.id}><td><span className="code-label">{employee.employeeNo}</span></td><td><input className="table-input name-input" value={employee.name} onChange={(event) => updateEmployee(employee.id, 'name', event.target.value)} /></td><td><select className="table-input table-select" value={employee.departmentCode ?? ''} onChange={(event) => updateEmployee(employee.id, 'departmentCode', event.target.value)}>{data.departments.filter((department) => department.active).map((department) => <option key={department.id} value={department.code}>{department.code}｜{department.name}</option>)}</select></td><td><input className="table-input" value={employee.title} onChange={(event) => updateEmployee(employee.id, 'title', event.target.value)} /></td><td><span className="tag success">啟用中</span></td><td><button className="table-action-button" onClick={() => { setPasswordEmployeeId(passwordEmployeeId === employee.id ? null : employee.id); setPasswordDraft('') }}><KeyRound size={14} />重設密碼</button>{passwordEmployeeId === employee.id && <div className="inline-password"><input type="password" value={passwordDraft} onChange={(event) => setPasswordDraft(event.target.value)} placeholder="至少 6 碼" /><button className="small-save" onClick={() => { if (updatePassword(employee.id, passwordDraft)) { setPasswordEmployeeId(null); setPasswordDraft('') } }}>儲存</button></div>}</td></tr>)}</tbody></table></div></section>
+  return <section className="content-card employee-admin-card"><div className="card-heading"><div><p className="eyebrow">TEAM DIRECTORY</p><h2>員工資料</h2><p className="muted">新增時可自行輸入員工編號、姓名與職稱，部門請從已設定的部門選取。</p></div><button className="primary-button" onClick={() => setIsAdding((value) => !value)}>{isAdding ? <X size={16} /> : <Plus size={16} />}{isAdding ? '取消新增' : '新增員工'}</button></div>{isAdding && <form className="employee-add-form" onSubmit={submitEmployee}><label><span>員工編號 *</span><input value={draft.employeeNo} onChange={(event) => updateDraft('employeeNo', event.target.value)} placeholder="例如 DA006" /></label><label><span>姓名 *</span><input value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} placeholder="請輸入姓名" /></label><label><span>部門 *</span><select value={draft.departmentCode} onChange={(event) => updateDraft('departmentCode', event.target.value)}>{data.departments.filter((department) => department.active).map((department) => <option key={department.id} value={department.code}>{department.code}｜{department.name}</option>)}</select></label><label><span>職稱</span><input value={draft.title} onChange={(event) => updateDraft('title', event.target.value)} placeholder="例如 前台接待" /></label><label><span>系統權限 *</span><select value={draft.accessRole} onChange={(event) => updateDraft('accessRole', event.target.value as UserRole)}><option value="employee">一般員工</option><option value="manager">部門主管</option><option value="hr">HR</option><option value="admin">Admin</option></select></label><button className="primary-button form-submit" type="submit"><Check size={16} />儲存員工</button></form>}<div className="employee-table-wrap"><table><thead><tr><th>員工編號</th><th>姓名</th><th>部門</th><th>職稱</th><th>權限</th><th>狀態</th><th>帳號操作</th></tr></thead><tbody>{data.employees.map((employee) => <tr key={employee.id}><td><span className="code-label">{employee.employeeNo}</span></td><td><input className="table-input name-input" value={employee.name} onChange={(event) => updateEmployee(employee.id, 'name', event.target.value)} /></td><td><select className="table-input table-select" value={employee.departmentCode ?? ''} onChange={(event) => updateEmployee(employee.id, 'departmentCode', event.target.value)}>{data.departments.filter((department) => department.active).map((department) => <option key={department.id} value={department.code}>{department.code}｜{department.name}</option>)}</select></td><td><input className="table-input" value={employee.title} onChange={(event) => updateEmployee(employee.id, 'title', event.target.value)} /></td><td><select className="table-input table-select" value={employee.accessRole ?? 'employee'} onChange={(event) => updateEmployee(employee.id, 'accessRole', event.target.value)}><option value="employee">一般員工</option><option value="manager">部門主管</option><option value="hr">HR</option><option value="admin">Admin</option></select></td><td><span className="tag success">啟用中</span></td><td><button className="table-action-button" onClick={() => { setPasswordEmployeeId(passwordEmployeeId === employee.id ? null : employee.id); setPasswordDraft('') }}><KeyRound size={14} />重設密碼</button>{passwordEmployeeId === employee.id && <div className="inline-password"><input type="password" value={passwordDraft} onChange={(event) => setPasswordDraft(event.target.value)} placeholder="至少 6 碼" /><button className="small-save" onClick={() => { if (updatePassword(employee.id, passwordDraft)) { setPasswordEmployeeId(null); setPasswordDraft('') } }}>儲存</button></div>}</td></tr>)}</tbody></table></div></section>
 }
 
 function DepartmentAdmin({ data, addDepartment, updateDepartment }: { data: DemoData; addDepartment: (input: NewDepartment) => void; updateDepartment: (id: string, field: keyof Department, value: string) => void }) {

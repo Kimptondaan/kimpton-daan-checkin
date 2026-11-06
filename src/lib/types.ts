@@ -1,4 +1,4 @@
-export type UserRole = 'employee' | 'admin'
+export type UserRole = 'employee' | 'admin' | 'hr' | 'manager'
 export type AttendanceType = 'check_in' | 'check_out'
 export type NetworkMode = 'test' | 'strict'
 
@@ -11,6 +11,7 @@ export interface Employee {
   title: string
   active: boolean
   password?: string
+  accessRole?: UserRole
 }
 
 export interface Department {

@@ -10,11 +10,11 @@ const todayAt = (hour: number, minute: number) => {
 }
 
 const seedEmployees: Employee[] = [
-  { id: 'emp-001', employeeNo: 'DA001', name: '林芷安', department: '客務部', departmentCode: 'FO', title: '前台接待', active: true, password: DEFAULT_PASSWORD },
-  { id: 'emp-002', employeeNo: 'DA002', name: '陳柏宇', department: '房務部', departmentCode: 'HK', title: '房務主任', active: true, password: DEFAULT_PASSWORD },
-  { id: 'emp-003', employeeNo: 'DA003', name: '黃詠晴', department: '餐飲部', departmentCode: 'FB', title: '餐飲服務', active: true, password: DEFAULT_PASSWORD },
-  { id: 'emp-004', employeeNo: 'DA004', name: '王昱翔', department: '工程部', departmentCode: 'EN', title: '設備技師', active: true, password: DEFAULT_PASSWORD },
-  { id: 'emp-005', employeeNo: 'DA005', name: '許雅雯', department: '管理部', departmentCode: 'AD', title: '人資專員', active: true, password: DEFAULT_PASSWORD },
+  { id: 'emp-001', employeeNo: 'DA001', name: '林芷安', department: '客務部', departmentCode: 'FO', title: '前台接待', active: true, password: DEFAULT_PASSWORD, accessRole: 'employee' },
+  { id: 'emp-002', employeeNo: 'DA002', name: '陳柏宇', department: '房務部', departmentCode: 'HK', title: '房務主任', active: true, password: DEFAULT_PASSWORD, accessRole: 'employee' },
+  { id: 'emp-003', employeeNo: 'DA003', name: '黃詠晴', department: '餐飲部', departmentCode: 'FB', title: '餐飲服務', active: true, password: DEFAULT_PASSWORD, accessRole: 'employee' },
+  { id: 'emp-004', employeeNo: 'DA004', name: '王昱翔', department: '工程部', departmentCode: 'EN', title: '工程主管', active: true, password: DEFAULT_PASSWORD, accessRole: 'manager' },
+  { id: 'emp-005', employeeNo: 'DA005', name: '許雅雯', department: '管理部', departmentCode: 'AD', title: '人資專員', active: true, password: DEFAULT_PASSWORD, accessRole: 'hr' },
 ]
 
 const seedDepartments: Department[] = [
@@ -49,6 +49,7 @@ function normalizeData(value: Partial<DemoData>): DemoData {
   const employees = (value.employees ?? cloneDefault().employees).map((employee) => ({
     ...employee,
     password: employee.password ?? DEFAULT_PASSWORD,
+    accessRole: employee.accessRole ?? 'employee',
     departmentCode: employee.departmentCode ?? departments.find((department) => department.name === employee.department)?.code ?? departments[0]?.code ?? '',
   }))
   return {
@@ -126,20 +127,17 @@ export function formatDate(value: string) {
 export function toCsv(records: AttendanceRecord[], employees: Employee[]) {
   const rows = records.map((record) => {
     const employee = employees.find((item) => item.id === record.employeeId)
+    const punchedAt = new Date(record.punchedAt)
+    const date = `${punchedAt.getFullYear()}/${String(punchedAt.getMonth() + 1).padStart(2, '0')}/${String(punchedAt.getDate()).padStart(2, '0')}`
     return {
+      日期: date,
+      刷卡時間: `${String(punchedAt.getHours()).padStart(2, '0')}:${String(punchedAt.getMinutes()).padStart(2, '0')}:${String(punchedAt.getSeconds()).padStart(2, '0')}`,
       員工編號: employee?.employeeNo ?? '',
-      姓名: employee?.name ?? '',
-      部門: employee?.department ?? '',
-      職稱: employee?.title ?? '',
-      刷卡類型: record.type === 'check_in' ? '上班' : '下班',
-      刷卡時間: new Date(record.punchedAt).toLocaleString('zh-TW'),
-      來源網路: record.networkName,
-      來源IP: record.ip,
-      狀態: record.status === 'accepted' ? '正常' : record.status === 'manual' ? '人工補登' : '拒絕',
+      班別: record.type === 'check_in' ? 'F1' : 'F2',
     }
   })
 
-  const headers = Object.keys(rows[0] ?? { 員工編號: '', 姓名: '', 部門: '', 職稱: '', 刷卡類型: '', 刷卡時間: '', 來源網路: '', 來源IP: '', 狀態: '' })
+  const headers = Object.keys(rows[0] ?? { 日期: '', 刷卡時間: '', 員工編號: '', 班別: '' })
   const escape = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`
   return '\uFEFF' + [headers, ...rows.map((row) => headers.map((header) => row[header as keyof typeof row]))]
     .map((row) => row.map(escape).join(','))
