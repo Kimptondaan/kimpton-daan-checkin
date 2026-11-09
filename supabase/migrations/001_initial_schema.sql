@@ -89,9 +89,17 @@ drop policy if exists "Admin can manage departments" on public.departments;
 create policy "Admin can manage departments" on public.departments
 for all to authenticated using (public.current_user_role() = 'admin') with check (public.current_user_role() = 'admin');
 
+drop policy if exists "HR can manage departments" on public.departments;
+create policy "HR can manage departments" on public.departments
+for all to authenticated using (public.current_user_role() in ('admin', 'hr')) with check (public.current_user_role() in ('admin', 'hr'));
+
 drop policy if exists "Users can view allowed networks" on public.allowed_networks;
 create policy "Users can view allowed networks" on public.allowed_networks
 for select to authenticated using (public.current_user_role() in ('admin', 'hr', 'manager'));
+
+drop policy if exists "Admin can manage allowed networks" on public.allowed_networks;
+create policy "Admin can manage allowed networks" on public.allowed_networks
+for all to authenticated using (public.current_user_role() = 'admin') with check (public.current_user_role() = 'admin');
 
 drop policy if exists "Users can view permitted profiles" on public.profiles;
 create policy "Users can view permitted profiles" on public.profiles
@@ -104,6 +112,10 @@ for select to authenticated using (
 drop policy if exists "Admin can manage profiles" on public.profiles;
 create policy "Admin can manage profiles" on public.profiles
 for all to authenticated using (public.current_user_role() = 'admin') with check (public.current_user_role() = 'admin');
+
+drop policy if exists "HR can manage profiles" on public.profiles;
+create policy "HR can manage profiles" on public.profiles
+for all to authenticated using (public.current_user_role() in ('admin', 'hr')) with check (public.current_user_role() in ('admin', 'hr'));
 
 drop policy if exists "Users can view permitted attendance" on public.attendance_records;
 create policy "Users can view permitted attendance" on public.attendance_records
