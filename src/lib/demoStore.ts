@@ -124,24 +124,15 @@ export function formatDate(value: string) {
   }).format(new Date(value))
 }
 
-export function toCsv(records: AttendanceRecord[], employees: Employee[]) {
-  const rows = records.map((record) => {
+export function toTxt(records: AttendanceRecord[], employees: Employee[]) {
+  return records.map((record) => {
     const employee = employees.find((item) => item.id === record.employeeId)
     const punchedAt = new Date(record.punchedAt)
-    const date = `${punchedAt.getFullYear()}/${String(punchedAt.getMonth() + 1).padStart(2, '0')}/${String(punchedAt.getDate()).padStart(2, '0')}`
-    return {
-      日期: date,
-      刷卡時間: `${String(punchedAt.getHours()).padStart(2, '0')}:${String(punchedAt.getMinutes()).padStart(2, '0')}:${String(punchedAt.getSeconds()).padStart(2, '0')}`,
-      員工編號: employee?.employeeNo ?? '',
-      班別: record.type === 'check_in' ? 'F1' : 'F2',
-    }
-  })
-
-  const headers = Object.keys(rows[0] ?? { 日期: '', 刷卡時間: '', 員工編號: '', 班別: '' })
-  const escape = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`
-  return '\uFEFF' + [headers, ...rows.map((row) => headers.map((header) => row[header as keyof typeof row]))]
-    .map((row) => row.map(escape).join(','))
-    .join('\n')
+    const date = `${punchedAt.getFullYear()}${String(punchedAt.getMonth() + 1).padStart(2, '0')}${String(punchedAt.getDate()).padStart(2, '0')}`
+    const time = `${String(punchedAt.getHours()).padStart(2, '0')}${String(punchedAt.getMinutes()).padStart(2, '0')}`
+    const punchCode = record.type === 'check_in' ? 'F2' : 'F3'
+    return `${date}${time}${employee?.employeeNo ?? ''}${punchCode}`
+  }).join('\n')
 }
 
 export type { Department, DemoData, Employee, NetworkSettings }
