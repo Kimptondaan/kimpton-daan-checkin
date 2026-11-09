@@ -130,7 +130,7 @@ export function toTxt(records: AttendanceRecord[], employees: Employee[]) {
     const punchedAt = new Date(record.punchedAt)
     const date = `${punchedAt.getFullYear()}${String(punchedAt.getMonth() + 1).padStart(2, '0')}${String(punchedAt.getDate()).padStart(2, '0')}`
     const time = `${String(punchedAt.getHours()).padStart(2, '0')}${String(punchedAt.getMinutes()).padStart(2, '0')}`
-    const punchCode = record.type === 'check_in' ? 'F2' : 'F3'
+    const punchCode = record.type === 'check_in' ? 'F1' : 'F2'
     return `${date}${time}${employee?.employeeNo ?? ''}${punchCode}`
   }).join('\n')
 }
