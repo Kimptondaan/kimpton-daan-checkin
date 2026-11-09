@@ -79,11 +79,15 @@ alter table public.attendance_records enable row level security;
 
 revoke all on public.departments, public.profiles, public.allowed_networks, public.attendance_records from anon;
 grant select on public.departments, public.profiles, public.attendance_records to authenticated;
-grant insert on public.attendance_records to authenticated;
+grant insert, update on public.departments, public.profiles, public.allowed_networks, public.attendance_records to authenticated;
 
 drop policy if exists "Authenticated users can view departments" on public.departments;
 create policy "Authenticated users can view departments" on public.departments
 for select to authenticated using (true);
+
+drop policy if exists "Admin can manage departments" on public.departments;
+create policy "Admin can manage departments" on public.departments
+for all to authenticated using (public.current_user_role() = 'admin') with check (public.current_user_role() = 'admin');
 
 drop policy if exists "Users can view allowed networks" on public.allowed_networks;
 create policy "Users can view allowed networks" on public.allowed_networks
@@ -96,6 +100,10 @@ for select to authenticated using (
   or public.current_user_role() in ('admin', 'hr')
   or (public.current_user_role() = 'manager' and department_id = public.current_department_id())
 );
+
+drop policy if exists "Admin can manage profiles" on public.profiles;
+create policy "Admin can manage profiles" on public.profiles
+for all to authenticated using (public.current_user_role() = 'admin') with check (public.current_user_role() = 'admin');
 
 drop policy if exists "Users can view permitted attendance" on public.attendance_records;
 create policy "Users can view permitted attendance" on public.attendance_records
@@ -112,6 +120,14 @@ for select to authenticated using (
 drop policy if exists "Users can create their own attendance" on public.attendance_records;
 create policy "Users can create their own attendance" on public.attendance_records
 for insert to authenticated with check (employee_id = auth.uid());
+
+drop policy if exists "Admin can create attendance" on public.attendance_records;
+create policy "Admin can create attendance" on public.attendance_records
+for insert to authenticated with check (public.current_user_role() = 'admin');
+
+drop policy if exists "Admin can update attendance" on public.attendance_records;
+create policy "Admin can update attendance" on public.attendance_records
+for update to authenticated using (public.current_user_role() = 'admin') with check (public.current_user_role() = 'admin');
 
 revoke all on function public.current_profile() from public, anon;
 revoke all on function public.current_user_role() from public, anon;
