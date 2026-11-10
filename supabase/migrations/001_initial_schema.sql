@@ -2,7 +2,7 @@ create extension if not exists pgcrypto;
 
 -- Roles and attendance types are created only when absent so this migration can be rerun safely.
 do $$ begin
-  create type public.user_role as enum ('employee', 'admin', 'hr', 'manager');
+  create type public.user_role as enum ('employee', 'admin', 'hr', 'it', 'manager');
 exception when duplicate_object then null; end $$;
 do $$ begin
   create type public.attendance_type as enum ('check_in', 'check_out');
@@ -89,13 +89,13 @@ drop policy if exists "Admin can manage departments" on public.departments;
 create policy "Admin can manage departments" on public.departments
 for all to authenticated using (public.current_user_role() = 'admin') with check (public.current_user_role() = 'admin');
 
-drop policy if exists "HR can manage departments" on public.departments;
-create policy "HR can manage departments" on public.departments
-for all to authenticated using (public.current_user_role() in ('admin', 'hr')) with check (public.current_user_role() in ('admin', 'hr'));
+drop policy if exists "HR and IT can manage departments" on public.departments;
+create policy "HR and IT can manage departments" on public.departments
+for all to authenticated using (public.current_user_role() in ('admin', 'hr', 'it')) with check (public.current_user_role() in ('admin', 'hr', 'it'));
 
 drop policy if exists "Users can view allowed networks" on public.allowed_networks;
 create policy "Users can view allowed networks" on public.allowed_networks
-for select to authenticated using (public.current_user_role() in ('admin', 'hr', 'manager'));
+for select to authenticated using (public.current_user_role() in ('admin', 'hr', 'it', 'manager'));
 
 drop policy if exists "Admin can manage allowed networks" on public.allowed_networks;
 create policy "Admin can manage allowed networks" on public.allowed_networks
@@ -105,7 +105,7 @@ drop policy if exists "Users can view permitted profiles" on public.profiles;
 create policy "Users can view permitted profiles" on public.profiles
 for select to authenticated using (
   id = auth.uid()
-  or public.current_user_role() in ('admin', 'hr')
+  or public.current_user_role() in ('admin', 'hr', 'it')
   or (public.current_user_role() = 'manager' and department_id = public.current_department_id())
 );
 
@@ -113,15 +113,15 @@ drop policy if exists "Admin can manage profiles" on public.profiles;
 create policy "Admin can manage profiles" on public.profiles
 for all to authenticated using (public.current_user_role() = 'admin') with check (public.current_user_role() = 'admin');
 
-drop policy if exists "HR can manage profiles" on public.profiles;
-create policy "HR can manage profiles" on public.profiles
-for all to authenticated using (public.current_user_role() in ('admin', 'hr')) with check (public.current_user_role() in ('admin', 'hr'));
+drop policy if exists "HR and IT can manage profiles" on public.profiles;
+create policy "HR and IT can manage profiles" on public.profiles
+for all to authenticated using (public.current_user_role() in ('admin', 'hr', 'it')) with check (public.current_user_role() in ('admin', 'hr', 'it'));
 
 drop policy if exists "Users can view permitted attendance" on public.attendance_records;
 create policy "Users can view permitted attendance" on public.attendance_records
 for select to authenticated using (
   employee_id = auth.uid()
-  or public.current_user_role() in ('admin', 'hr')
+  or public.current_user_role() in ('admin', 'hr', 'it')
   or (public.current_user_role() = 'manager' and exists (
     select 1 from public.profiles p
     where p.id = attendance_records.employee_id

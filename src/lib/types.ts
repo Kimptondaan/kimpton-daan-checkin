@@ -1,4 +1,4 @@
-export type UserRole = 'employee' | 'admin' | 'hr' | 'manager'
+export type UserRole = 'employee' | 'admin' | 'hr' | 'it' | 'manager'
 export type AttendanceType = 'check_in' | 'check_out'
 export type NetworkMode = 'test' | 'strict'
 

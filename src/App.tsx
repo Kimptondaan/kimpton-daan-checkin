@@ -9,6 +9,7 @@ import {
   CircleAlert,
   Clock3,
   Download,
+  FileDown,
   FileSpreadsheet,
   Globe2,
   KeyRound,
@@ -17,6 +18,7 @@ import {
   Network,
   Pencil,
   Plus,
+  Upload,
   Search,
   Settings,
   ShieldCheck,
@@ -199,6 +201,28 @@ function App() {
     notify(`已新增 ${newEmployee.employeeNo}，請直接修改欄位內容`)
   }
 
+  function importEmployees(rows: string[][]) {
+    const validRoles: UserRole[] = ['employee', 'manager', 'hr', 'it', 'admin']
+    const existingNumbers = new Set(data.employees.map((employee) => employee.employeeNo))
+    const imported: Employee[] = []
+    let failed = 0
+    rows.slice(1).forEach((row, index) => {
+      const [employeeNoRaw, nameRaw, departmentCodeRaw, titleRaw, roleRaw, passwordRaw] = row.map((value) => value?.trim() ?? '')
+      const employeeNo = employeeNoRaw.toUpperCase()
+      const departmentCode = departmentCodeRaw.toUpperCase()
+      const department = data.departments.find((item) => item.code === departmentCode)
+      const accessRole = (roleRaw || 'employee') as UserRole
+      if (!employeeNo || !nameRaw || !department || !validRoles.includes(accessRole) || existingNumbers.has(employeeNo)) {
+        failed += 1
+        return
+      }
+      existingNumbers.add(employeeNo)
+      imported.push({ id: `emp-import-${Date.now()}-${index}`, employeeNo, name: nameRaw, department: department.name, departmentCode, title: titleRaw, password: passwordRaw || DEFAULT_PASSWORD, accessRole, active: true })
+    })
+    if (imported.length) setData((current) => ({ ...current, employees: [...current.employees, ...imported] }))
+    notify(`批次匯入完成：成功 ${imported.length} 筆，略過 ${failed} 筆${failed ? '（請檢查員工編號、部門代號與權限）' : ''}`, failed ? 'info' : 'success')
+  }
+
   function toggleEmployeeActive(id: string) {
     setData((current) => ({ ...current, employees: current.employees.map((employee) => employee.id === id ? { ...employee, active: !employee.active } : employee) }))
     notify('帳號狀態已更新')
@@ -310,6 +334,7 @@ function App() {
       saveNetworkSettings={saveNetworkSettings}
       updateEmployee={updateEmployee}
       toggleEmployeeActive={toggleEmployeeActive}
+      importEmployees={importEmployees}
       addAttendanceRecord={addAttendanceRecord}
       updateAttendanceRecord={updateAttendanceRecord}
       addEmployee={addEmployee}
@@ -447,16 +472,16 @@ function PersonalRecords({ records, exportAttendance }: { records: DemoData['rec
 }
 
 function AdminShell(props: {
-  data: DemoData; accessRole: UserRole; scopeDepartmentCode?: string; now: Date; activeView: View; setActiveView: (value: View) => void; mobileNavOpen: boolean; setMobileNavOpen: (value: boolean) => void; logout: () => void; filteredRecords: DemoData['records']; exportAttendance: (records?: DemoData['records']) => void; networkDraft: string; setNetworkDraft: (value: string) => void; networkModeDraft: NetworkMode; setNetworkModeDraft: (value: NetworkMode) => void; saveNetworkSettings: () => void; updateEmployee: (id: string, field: keyof Employee, value: string) => void; toggleEmployeeActive: (id: string) => void; addAttendanceRecord: (input: { employeeId: string; type: AttendanceRecord['type']; punchedAt: string }) => void; updateAttendanceRecord: (id: string, patch: Partial<Pick<AttendanceRecord, 'type' | 'punchedAt'>>) => void; addEmployee: (input: NewEmployee) => void; addDepartment: (input: NewDepartment) => void; updateDepartment: (id: string, field: keyof Department, value: string) => void; updatePassword: (accountId: string, password: string) => boolean; resetDemo: () => void; toast: Toast | null
+  data: DemoData; accessRole: UserRole; scopeDepartmentCode?: string; now: Date; activeView: View; setActiveView: (value: View) => void; mobileNavOpen: boolean; setMobileNavOpen: (value: boolean) => void; logout: () => void; filteredRecords: DemoData['records']; exportAttendance: (records?: DemoData['records']) => void; networkDraft: string; setNetworkDraft: (value: string) => void; networkModeDraft: NetworkMode; setNetworkModeDraft: (value: NetworkMode) => void; saveNetworkSettings: () => void; updateEmployee: (id: string, field: keyof Employee, value: string) => void; toggleEmployeeActive: (id: string) => void; importEmployees: (rows: string[][]) => void; addAttendanceRecord: (input: { employeeId: string; type: AttendanceRecord['type']; punchedAt: string }) => void; updateAttendanceRecord: (id: string, patch: Partial<Pick<AttendanceRecord, 'type' | 'punchedAt'>>) => void; addEmployee: (input: NewEmployee) => void; addDepartment: (input: NewDepartment) => void; updateDepartment: (id: string, field: keyof Department, value: string) => void; updatePassword: (accountId: string, password: string) => boolean; resetDemo: () => void; toast: Toast | null
 }) {
-  const { data, accessRole, scopeDepartmentCode, now, activeView, setActiveView, mobileNavOpen, setMobileNavOpen, logout, filteredRecords, exportAttendance, networkDraft, setNetworkDraft, networkModeDraft, setNetworkModeDraft, saveNetworkSettings, updateEmployee, toggleEmployeeActive, addAttendanceRecord, updateAttendanceRecord, addEmployee, addDepartment, updateDepartment, updatePassword, resetDemo, toast } = props
+  const { data, accessRole, scopeDepartmentCode, now, activeView, setActiveView, mobileNavOpen, setMobileNavOpen, logout, filteredRecords, exportAttendance, networkDraft, setNetworkDraft, networkModeDraft, setNetworkModeDraft, saveNetworkSettings, updateEmployee, toggleEmployeeActive, importEmployees, addAttendanceRecord, updateAttendanceRecord, addEmployee, addDepartment, updateDepartment, updatePassword, resetDemo, toast } = props
   const [query, setQuery] = useState('')
   const [dateFilter, setDateFilter] = useState<'today' | 'all'>('today')
   const scopedEmployees = data.employees.filter((employee) => accessRole !== 'manager' || employee.departmentCode === scopeDepartmentCode)
   const scopedEmployeeIds = new Set(scopedEmployees.map((employee) => employee.id))
   const todayRecords = data.records.filter((record) => isSameDay(record.punchedAt) && scopedEmployeeIds.has(record.employeeId))
   const scopedRecords = data.records.filter((record) => {
-    if (accessRole === 'admin' || accessRole === 'hr') return true
+    if (accessRole === 'admin' || accessRole === 'hr' || accessRole === 'it') return true
     const employee = data.employees.find((item) => item.id === record.employeeId)
     return accessRole === 'manager' && employee?.departmentCode === scopeDepartmentCode
   })
@@ -474,7 +499,7 @@ function AdminShell(props: {
     { id: 'employees', label: '員工資料', icon: UsersRound },
     { id: 'departments', label: '部門設定', icon: Building2 },
     { id: 'settings', label: '系統設定', icon: Settings },
-  ] as { id: View; label: string; icon: typeof Clock3 }[]).filter((item) => accessRole === 'admin' || accessRole === 'hr' || item.id === 'dashboard' || item.id === 'attendance')
+  ] as { id: View; label: string; icon: typeof Clock3 }[]).filter((item) => accessRole === 'admin' || (['hr', 'it'].includes(accessRole) && item.id !== 'settings') || item.id === 'dashboard' || item.id === 'attendance')
   const viewTitle = navItems.find((item) => item.id === activeView)?.label ?? '總覽'
 
   return <div className="admin-app">
@@ -483,7 +508,7 @@ function AdminShell(props: {
     <main className="admin-main"><div className="admin-heading"><div><p className="eyebrow">{activeView === 'dashboard' ? 'AT A GLANCE' : 'ADMIN CONSOLE'}</p><h1>{viewTitle}</h1><p className="muted">{formatDate(now.toISOString())} · 最後更新 {now.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })}</p></div><div className="heading-actions"><div className="network-summary"><span className="status-dot" />{data.network.mode === 'test' ? '測試模式' : 'IP 限制已啟用'}</div></div></div>
       {activeView === 'dashboard' && <AdminDashboard data={data} todayRecords={todayRecords} activeEmployees={activeEmployees} checkedEmployeeIds={checkedEmployeeIds} onNavigate={setActiveView} accessRole={accessRole} />}
       {activeView === 'attendance' && <AttendanceAdmin data={data} records={visibleRecords} query={query} setQuery={setQuery} dateFilter={dateFilter} setDateFilter={setDateFilter} addAttendanceRecord={addAttendanceRecord} updateAttendanceRecord={updateAttendanceRecord} canEditAttendance={accessRole === 'admin'} accessRole={accessRole} scopeDepartmentCode={scopeDepartmentCode} exportAttendance={exportAttendance} />}
-      {activeView === 'employees' && <EmployeeAdmin data={data} updateEmployee={updateEmployee} toggleEmployeeActive={toggleEmployeeActive} addEmployee={addEmployee} updatePassword={updatePassword} />}
+      {activeView === 'employees' && <EmployeeAdmin data={data} accessRole={accessRole} updateEmployee={updateEmployee} toggleEmployeeActive={toggleEmployeeActive} importEmployees={importEmployees} addEmployee={addEmployee} updatePassword={updatePassword} />}
       {activeView === 'departments' && <DepartmentAdmin data={data} addDepartment={addDepartment} updateDepartment={updateDepartment} />}
       {activeView === 'settings' && accessRole === 'admin' && <SettingsAdmin data={data} networkDraft={networkDraft} setNetworkDraft={setNetworkDraft} networkModeDraft={networkModeDraft} setNetworkModeDraft={setNetworkModeDraft} saveNetworkSettings={saveNetworkSettings} updatePassword={updatePassword} resetDemo={resetDemo} />}
     </main>{toast && <ToastMessage toast={toast} />}</div>
@@ -495,7 +520,7 @@ function AdminDashboard({ data, todayRecords, activeEmployees, checkedEmployeeId
   return <>
     <section className="admin-welcome"><div><span className="hero-kicker">TODAY · {new Date().toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' })}</span><h2>早安，管理者。</h2><p>這裡是團隊今天的出勤狀態。保持簡單，讓每個人準時開始。</p></div><div className="welcome-symbol"><Globe2 size={34} /></div></section>
     <section className="metric-grid"><MetricCard label="在職員工" value={activeEmployees.length} detail="目前啟用帳號" icon={<UsersRound size={19} />} /><MetricCard label="今日已刷卡" value={checkedEmployeeIds.size} detail={`上班 ${checkIns} · 下班 ${checkOuts}`} icon={<Clock3 size={19} />} /><MetricCard label="待處理異常" value={data.records.filter((record) => record.status === 'rejected').length} detail="需要管理者確認" icon={<CircleAlert size={19} />} warning /><MetricCard label="網路模式" value={data.network.mode === 'test' ? '測試' : '正式'} detail={data.network.allowedIps.length ? `${data.network.allowedIps.length} 組允許 IP` : '尚未設定 IP'} icon={<Network size={19} />} /></section>
-    <div className="admin-columns"><section className="content-card dashboard-list-card"><div className="card-heading"><div><p className="eyebrow">TODAY'S TEAM</p><h2>團隊出勤</h2></div><button className="text-button" onClick={() => onNavigate('attendance')}>查看全部 <ChevronRight size={15} /></button></div><div className="team-list">{activeEmployees.slice(0, 5).map((employee) => { const employeeRecords = todayRecords.filter((record) => record.employeeId === employee.id); const checkedIn = employeeRecords.some((record) => record.type === 'check_in'); const checkedOut = employeeRecords.some((record) => record.type === 'check_out'); return <div className="team-row" key={employee.id}><div className="avatar">{employee.name.slice(0, 1)}</div><div className="team-person"><strong>{employee.name}</strong><small>{employee.department} · {employee.title}</small></div><div className="team-status"><span className={checkedIn ? 'tag success' : 'tag'}>{checkedIn ? '已上班' : '未刷卡'}</span><span className={checkedOut ? 'tag success pale' : 'tag muted-tag'}>{checkedOut ? '已下班' : '—'}</span></div></div>})}</div></section><section className="content-card quick-card"><div className="card-heading"><div><p className="eyebrow">QUICK ACTIONS</p><h2>常用操作</h2></div><SlidersHorizontal size={21} /></div>{(accessRole === 'admin' || accessRole === 'hr') && <button onClick={() => onNavigate('employees')}><span className="quick-icon"><UsersRound size={18} /></span><span><strong>管理員工資料</strong><small>新增、編輯或停用帳號</small></span><ChevronRight size={16} /></button>}{accessRole === 'admin' && <button onClick={() => onNavigate('settings')}><span className="quick-icon"><Wifi size={18} /></span><span><strong>設定公司 IP</strong><small>{data.network.mode === 'test' ? '目前仍在測試模式' : '目前已啟用正式模式'}</small></span><ChevronRight size={16} /></button>}</section></div>
+    <div className="admin-columns"><section className="content-card dashboard-list-card"><div className="card-heading"><div><p className="eyebrow">TODAY'S TEAM</p><h2>團隊出勤</h2></div><button className="text-button" onClick={() => onNavigate('attendance')}>查看全部 <ChevronRight size={15} /></button></div><div className="team-list">{activeEmployees.slice(0, 5).map((employee) => { const employeeRecords = todayRecords.filter((record) => record.employeeId === employee.id); const checkedIn = employeeRecords.some((record) => record.type === 'check_in'); const checkedOut = employeeRecords.some((record) => record.type === 'check_out'); return <div className="team-row" key={employee.id}><div className="avatar">{employee.name.slice(0, 1)}</div><div className="team-person"><strong>{employee.name}</strong><small>{employee.department} · {employee.title}</small></div><div className="team-status"><span className={checkedIn ? 'tag success' : 'tag'}>{checkedIn ? '已上班' : '未刷卡'}</span><span className={checkedOut ? 'tag success pale' : 'tag muted-tag'}>{checkedOut ? '已下班' : '—'}</span></div></div>})}</div></section><section className="content-card quick-card"><div className="card-heading"><div><p className="eyebrow">QUICK ACTIONS</p><h2>常用操作</h2></div><SlidersHorizontal size={21} /></div>{(accessRole === 'admin' || accessRole === 'hr' || accessRole === 'it') && <button onClick={() => onNavigate('employees')}><span className="quick-icon"><UsersRound size={18} /></span><span><strong>管理員工資料</strong><small>新增、編輯或停用帳號</small></span><ChevronRight size={16} /></button>}{accessRole === 'admin' && <button onClick={() => onNavigate('settings')}><span className="quick-icon"><Wifi size={18} /></span><span><strong>設定公司 IP</strong><small>{data.network.mode === 'test' ? '目前仍在測試模式' : '目前已啟用正式模式'}</small></span><ChevronRight size={16} /></button>}</section></div>
   </>
 }
 
@@ -530,14 +555,32 @@ function AttendanceAdmin({ data, records, query, setQuery, dateFilter, setDateFi
   </section>
 }
 
-function EmployeeAdmin({ data, updateEmployee, toggleEmployeeActive, addEmployee, updatePassword }: { data: DemoData; updateEmployee: (id: string, field: keyof Employee, value: string) => void; toggleEmployeeActive: (id: string) => void; addEmployee: (input: NewEmployee) => void; updatePassword: (accountId: string, password: string) => boolean }) {
+function EmployeeAdmin({ data, accessRole, updateEmployee, toggleEmployeeActive, importEmployees, addEmployee, updatePassword }: { data: DemoData; accessRole: UserRole; updateEmployee: (id: string, field: keyof Employee, value: string) => void; toggleEmployeeActive: (id: string) => void; importEmployees: (rows: string[][]) => void; addEmployee: (input: NewEmployee) => void; updatePassword: (accountId: string, password: string) => boolean }) {
   const [isAdding, setIsAdding] = useState(false)
   const [passwordEmployeeId, setPasswordEmployeeId] = useState<string | null>(null)
   const [passwordDraft, setPasswordDraft] = useState('')
+  const canBulkImport = ['admin', 'hr', 'it'].includes(accessRole)
   const [draft, setDraft] = useState<NewEmployee>({ employeeNo: '', name: '', departmentCode: data.departments[0]?.code ?? '', title: '', accessRole: 'employee' })
   const updateDraft = (field: keyof NewEmployee, value: string) => setDraft((current) => ({ ...current, [field]: value }))
   function submitEmployee(event: React.FormEvent) { event.preventDefault(); addEmployee(draft); if (draft.employeeNo && draft.name && draft.departmentCode) { setDraft({ employeeNo: '', name: '', departmentCode: data.departments[0]?.code ?? '', title: '', accessRole: 'employee' }); setIsAdding(false) } }
-  return <section className="content-card employee-admin-card"><div className="card-heading"><div><p className="eyebrow">TEAM DIRECTORY</p><h2>員工資料與帳號</h2><p className="muted">Admin 可新增、異動人員資料、重設密碼及啟用／停用帳號。</p></div><button className="primary-button" onClick={() => setIsAdding((value) => !value)}>{isAdding ? <X size={16} /> : <Plus size={16} />}{isAdding ? '取消新增' : '新增員工'}</button></div>{isAdding && <form className="employee-add-form" onSubmit={submitEmployee}><label><span>員工編號 *</span><input value={draft.employeeNo} onChange={(event) => updateDraft('employeeNo', event.target.value)} placeholder="例如 DA006" /></label><label><span>姓名 *</span><input value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} placeholder="請輸入姓名" /></label><label><span>部門 *</span><select value={draft.departmentCode} onChange={(event) => updateDraft('departmentCode', event.target.value)}>{data.departments.filter((department) => department.active).map((department) => <option key={department.id} value={department.code}>{department.code}｜{department.name}</option>)}</select></label><label><span>職稱</span><input value={draft.title} onChange={(event) => updateDraft('title', event.target.value)} placeholder="例如 前台接待" /></label><label><span>系統權限 *</span><select value={draft.accessRole} onChange={(event) => updateDraft('accessRole', event.target.value as UserRole)}><option value="employee">一般員工</option><option value="manager">部門主管</option><option value="hr">人資主管</option><option value="admin">Admin</option></select></label><button className="primary-button form-submit" type="submit"><Check size={16} />儲存員工</button></form>}<div className="employee-table-wrap"><table><thead><tr><th>員工編號</th><th>姓名</th><th>部門</th><th>職稱</th><th>權限</th><th>狀態</th><th>帳號操作</th></tr></thead><tbody>{data.employees.map((employee) => <tr key={employee.id}><td><span className="code-label">{employee.employeeNo}</span></td><td><input className="table-input name-input" value={employee.name} onChange={(event) => updateEmployee(employee.id, 'name', event.target.value)} /></td><td><select className="table-input table-select" value={employee.departmentCode ?? ''} onChange={(event) => updateEmployee(employee.id, 'departmentCode', event.target.value)}>{data.departments.filter((department) => department.active).map((department) => <option key={department.id} value={department.code}>{department.code}｜{department.name}</option>)}</select></td><td><input className="table-input" value={employee.title} onChange={(event) => updateEmployee(employee.id, 'title', event.target.value)} /></td><td><select className="table-input table-select" value={employee.accessRole ?? 'employee'} onChange={(event) => updateEmployee(employee.id, 'accessRole', event.target.value)}><option value="employee">一般員工</option><option value="manager">部門主管</option><option value="hr">人資主管</option><option value="admin">Admin</option></select></td><td><button className={`table-action-button ${employee.active ? '' : 'danger-button'}`} onClick={() => toggleEmployeeActive(employee.id)}>{employee.active ? '啟用中' : '已停用'}</button></td><td><button className="table-action-button" onClick={() => { setPasswordEmployeeId(passwordEmployeeId === employee.id ? null : employee.id); setPasswordDraft('') }}><KeyRound size={14} />重設密碼</button>{passwordEmployeeId === employee.id && <div className="inline-password"><input type="password" value={passwordDraft} onChange={(event) => setPasswordDraft(event.target.value)} placeholder="至少 6 碼" /><button className="small-save" onClick={() => { if (updatePassword(employee.id, passwordDraft)) { setPasswordEmployeeId(null); setPasswordDraft('') } }}>儲存</button></div>}</td></tr>)}</tbody></table></div></section>
+  function downloadTemplate() {
+    const template = '員工編號,姓名,部門代號,職稱,系統權限,初始密碼\nDA006,王小明,FO,前台接待,employee,00000000\n'
+    const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([template], { type: 'text/csv;charset=utf-8;' })); link.download = '員工批次匯入範本.csv'; link.click(); URL.revokeObjectURL(link.href)
+  }
+  function parseImportFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const text = String(reader.result ?? '').replace(/^\uFEFF/, '')
+      const rows = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => line.split(/,|\t/).map((value) => value.replace(/^"|"$/g, '')))
+      if (rows.length < 2) return
+      importEmployees(rows)
+      event.target.value = ''
+    }
+    reader.readAsText(file, 'UTF-8')
+  }
+  return <section className="content-card employee-admin-card"><div className="card-heading"><div><p className="eyebrow">TEAM DIRECTORY</p><h2>員工資料與帳號</h2><p className="muted">{canBulkImport ? '可下載匯入範本，或整批新增員工；也可管理帳號啟用狀態。' : '可查看員工資料。'}</p></div><div className="heading-actions">{canBulkImport && <><button className="secondary-button" onClick={downloadTemplate}><FileDown size={16} />下載匯入範本</button><label className="secondary-button file-upload-button"><Upload size={16} />匯入員工檔案<input type="file" accept=".csv,.txt" onChange={parseImportFile} hidden /></label></>}{<button className="primary-button" onClick={() => setIsAdding((value) => !value)}>{isAdding ? <X size={16} /> : <Plus size={16} />}{isAdding ? '取消新增' : '新增員工'}</button>}</div></div>{isAdding && <form className="employee-add-form" onSubmit={submitEmployee}><label><span>員工編號 *</span><input value={draft.employeeNo} onChange={(event) => updateDraft('employeeNo', event.target.value)} placeholder="例如 DA006" /></label><label><span>姓名 *</span><input value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} placeholder="請輸入姓名" /></label><label><span>部門 *</span><select value={draft.departmentCode} onChange={(event) => updateDraft('departmentCode', event.target.value)}>{data.departments.filter((department) => department.active).map((department) => <option key={department.id} value={department.code}>{department.code}｜{department.name}</option>)}</select></label><label><span>職稱</span><input value={draft.title} onChange={(event) => updateDraft('title', event.target.value)} placeholder="例如 前台接待" /></label><label><span>系統權限 *</span><select value={draft.accessRole} onChange={(event) => updateDraft('accessRole', event.target.value as UserRole)}><option value="employee">一般員工</option><option value="manager">部門主管</option><option value="hr">人資主管</option><option value="it">IT 管理員</option><option value="admin">Admin</option></select></label><button className="primary-button form-submit" type="submit"><Check size={16} />儲存員工</button></form>}<div className="employee-table-wrap"><table><thead><tr><th>員工編號</th><th>姓名</th><th>部門</th><th>職稱</th><th>權限</th><th>狀態</th><th>帳號操作</th></tr></thead><tbody>{data.employees.map((employee) => <tr key={employee.id}><td><span className="code-label">{employee.employeeNo}</span></td><td><input className="table-input name-input" value={employee.name} onChange={(event) => updateEmployee(employee.id, 'name', event.target.value)} /></td><td><select className="table-input table-select" value={employee.departmentCode ?? ''} onChange={(event) => updateEmployee(employee.id, 'departmentCode', event.target.value)}>{data.departments.filter((department) => department.active).map((department) => <option key={department.id} value={department.code}>{department.code}｜{department.name}</option>)}</select></td><td><input className="table-input" value={employee.title} onChange={(event) => updateEmployee(employee.id, 'title', event.target.value)} /></td><td><select className="table-input table-select" value={employee.accessRole ?? 'employee'} onChange={(event) => updateEmployee(employee.id, 'accessRole', event.target.value)}><option value="employee">一般員工</option><option value="manager">部門主管</option><option value="hr">人資主管</option><option value="it">IT 管理員</option><option value="admin">Admin</option></select></td><td>{canBulkImport ? <button className={`table-action-button ${employee.active ? '' : 'danger-button'}`} onClick={() => toggleEmployeeActive(employee.id)}>{employee.active ? '啟用中' : '已停用'}</button> : <span className={`tag ${employee.active ? 'success' : ''}`}>{employee.active ? '啟用中' : '已停用'}</span>}</td><td><button className="table-action-button" onClick={() => { setPasswordEmployeeId(passwordEmployeeId === employee.id ? null : employee.id); setPasswordDraft('') }}><KeyRound size={14} />重設密碼</button>{passwordEmployeeId === employee.id && <div className="inline-password"><input type="password" value={passwordDraft} onChange={(event) => setPasswordDraft(event.target.value)} placeholder="至少 6 碼" /><button className="small-save" onClick={() => { if (updatePassword(employee.id, passwordDraft)) { setPasswordEmployeeId(null); setPasswordDraft('') } }}>儲存</button></div>}</td></tr>)}</tbody></table></div></section>
 }
 
 function DepartmentAdmin({ data, addDepartment, updateDepartment }: { data: DemoData; addDepartment: (input: NewDepartment) => void; updateDepartment: (id: string, field: keyof Department, value: string) => void }) {

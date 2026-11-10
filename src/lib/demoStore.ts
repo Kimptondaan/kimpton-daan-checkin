@@ -15,6 +15,7 @@ const seedEmployees: Employee[] = [
   { id: 'emp-003', employeeNo: 'DA003', name: '黃詠晴', department: '餐飲部', departmentCode: 'FB', title: '餐飲服務', active: true, password: DEFAULT_PASSWORD, accessRole: 'employee' },
   { id: 'emp-004', employeeNo: 'DA004', name: '王昱翔', department: '工程部', departmentCode: 'EN', title: '工程主管', active: true, password: DEFAULT_PASSWORD, accessRole: 'manager' },
   { id: 'emp-005', employeeNo: 'DA005', name: '許雅雯', department: '管理部', departmentCode: 'AD', title: '人資專員', active: true, password: DEFAULT_PASSWORD, accessRole: 'hr' },
+  { id: 'emp-006', employeeNo: 'DA006', name: 'IT 測試帳號', department: '管理部', departmentCode: 'AD', title: 'IT 管理員', active: true, password: DEFAULT_PASSWORD, accessRole: 'it' },
 ]
 
 const seedDepartments: Department[] = [
