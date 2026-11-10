@@ -302,3 +302,39 @@ button { min-height: 40px; }
   .simple-row time { white-space: nowrap; font-size: 10px; }
   .toast { font-size: 11px; }
 }
+
+.download-time-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted, #74716b);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.download-time-field input {
+  min-width: 172px;
+  min-height: 38px;
+  padding: 0 9px;
+  border: 1px solid var(--line, #dedbd4);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink, #1b1b19);
+  font: inherit;
+}
+
+.file-upload-button {
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .download-time-field {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .download-time-field input {
+    flex: 1;
+    min-width: 0;
+  }
+}
