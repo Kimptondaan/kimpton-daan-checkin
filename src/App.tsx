@@ -267,6 +267,10 @@ function App() {
       const existing = current.departments.find((department) => department.id === id)
       if (!existing) return current
       const nextValue = field === 'code' ? value.toUpperCase() : value
+      if (field === 'code' && current.departments.some((department) => department.id !== id && department.code === nextValue)) {
+        notify('部門代號已存在，請輸入其他代號', 'error')
+        return current
+      }
       const departments = current.departments.map((department) => department.id === id ? { ...department, [field]: nextValue } : department)
       const employees = field === 'name' || field === 'code'
         ? current.employees.map((employee) => employee.departmentCode === existing.code
