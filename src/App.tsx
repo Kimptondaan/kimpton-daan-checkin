@@ -55,8 +55,8 @@ function App() {
   const [data, setData] = useState<DemoData>(() => loadDemoData())
   const [session, setSession] = useState<Session | null>(null)
   const [loginMode, setLoginMode] = useState<UserRole>('employee')
-  const [employeeNo, setEmployeeNo] = useState('DA001')
-  const [password, setPassword] = useState(DEFAULT_PASSWORD)
+  const [employeeNo, setEmployeeNo] = useState('')
+  const [password, setPassword] = useState('')
   const [activeView, setActiveView] = useState<View>('dashboard')
   const [toast, setToast] = useState<Toast | null>(null)
   const [now, setNow] = useState(() => new Date())
@@ -115,7 +115,8 @@ function App() {
 
   function logout() {
     setSession(null)
-    setPassword(DEFAULT_PASSWORD)
+    setEmployeeNo('')
+    setPassword('')
     setMobileNavOpen(false)
   }
 
