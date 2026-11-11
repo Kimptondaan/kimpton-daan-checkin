@@ -395,11 +395,11 @@ function LoginPage(props: {
         <form className="login-form" onSubmit={props.handleLogin}>
           <label>
             <span>{props.loginMode === 'admin' ? '管理者帳號' : '員工編號'}</span>
-            <div className="input-wrap"><UserRound size={18} /><input value={props.employeeNo} onChange={(event) => props.setEmployeeNo(event.target.value)} placeholder={props.loginMode === 'admin' ? '例如 ADMIN' : '例如 DA001'} autoComplete="username" /></div>
+            <div className="input-wrap"><UserRound size={18} /><input value={props.employeeNo} onChange={(event) => props.setEmployeeNo(event.target.value)} autoComplete="username" /></div>
           </label>
           <label>
             <span>登入密碼</span>
-            <div className="input-wrap"><KeyRound size={18} /><input type="password" value={props.password} onChange={(event) => props.setPassword(event.target.value)} placeholder="預設為 8 個 0" autoComplete="current-password" /></div>
+            <div className="input-wrap"><KeyRound size={18} /><input type="password" value={props.password} onChange={(event) => props.setPassword(event.target.value)} autoComplete="current-password" /></div>
           </label>
           <button className="primary-button login-button" type="submit">進入系統 <ChevronRight size={18} /></button>
         </form>
