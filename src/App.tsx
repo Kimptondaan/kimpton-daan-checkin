@@ -40,7 +40,7 @@ import {
   toTxt,
   type DemoData,
 } from './lib/demoStore'
-import { supabaseReady } from './lib/supabase'
+import { supabase, supabaseReady } from './lib/supabase'
 
 const DEFAULT_PASSWORD = '00000000'
 
@@ -81,7 +81,7 @@ function App() {
 
   const notify = (message: string, tone: Toast['tone'] = 'success') => setToast({ message, tone })
 
-  function handleLogin(event: React.FormEvent) {
+  async function handleLogin(event: React.FormEvent) {
     event.preventDefault()
     const normalized = employeeNo.trim().toUpperCase()
     if (loginMode === 'admin') {
@@ -99,18 +99,29 @@ function App() {
       return
     }
 
-    const employee = data.employees.find((item) => item.employeeNo === normalized && item.active)
-    if (!employee) {
-      notify('找不到這個員工編號，請確認後再試', 'error')
+    const localEmployee = data.employees.find((item) => item.employeeNo === normalized && item.active)
+    if (localEmployee && password === (localEmployee.password ?? DEFAULT_PASSWORD)) {
+      setSession({ role: localEmployee.accessRole ?? 'employee', employee: localEmployee })
+      setActiveView('dashboard')
+      notify(`早安，${localEmployee.name}，今天也辛苦了`, 'success')
       return
     }
-    if (password !== (employee.password ?? DEFAULT_PASSWORD)) {
-      notify('員工密碼不正確，請洽管理者重設', 'error')
-      return
+    if (supabase) {
+      const email = `${normalized.toLowerCase()}@checkin.kimptondaan.local`
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password })
+      if (!authError && authData.user) {
+        const { data: profile, error: profileError } = await supabase.from('profiles').select('id, employee_no, full_name, department_id, job_title, role, is_active').eq('id', authData.user.id).maybeSingle()
+        if (!profileError && profile?.is_active) {
+          const cloudEmployee: Employee = { id: profile.id, employeeNo: profile.employee_no, name: profile.full_name, department: '', departmentCode: '', title: profile.job_title ?? '', active: true, accessRole: profile.role }
+          setSession({ role: cloudEmployee.accessRole ?? 'employee', employee: cloudEmployee })
+          setActiveView('dashboard')
+          notify(`早安，${cloudEmployee.name}，今天也辛苦了`, 'success')
+          return
+        }
+        await supabase.auth.signOut()
+      }
     }
-    setSession({ role: employee.accessRole ?? 'employee', employee })
-    setActiveView('dashboard')
-    notify(`早安，${employee.name}，今天也辛苦了`, 'success')
+    notify(localEmployee ? '員工密碼不正確，請洽管理者重設' : '找不到這個員工編號或密碼不正確，請確認後再試', 'error')
   }
 
   function logout() {
@@ -364,7 +375,7 @@ function LoginPage(props: {
   setEmployeeNo: (value: string) => void
   password: string
   setPassword: (value: string) => void
-  handleLogin: (event: React.FormEvent) => void
+  handleLogin: (event: React.FormEvent) => void | Promise<void>
   data: DemoData
 }) {
   return (
