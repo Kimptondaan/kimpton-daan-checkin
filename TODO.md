@@ -65,7 +65,7 @@
 - [x] 接入正式 Supabase Auth，將員工編號對應登入帳號；240387、240392 已通過雲端登入測試。
 - [x] 建立並執行 Supabase profiles、allowed_networks、attendance_records 初始 migration。
 - [x] Netlify 後端函式使用 context.ip 取得來源 IP，完成 IPv4／IPv6 CIDR 判斷單元測試；實際公司網路限制待白名單及 002 權限補強。
-- [ ] 以 RLS 禁止一般員工直接寫入或修改出勤資料。
+- [x] 002 已執行，以資料表權限及 RLS 禁止瀏覽器直接寫入或修改出勤資料；兩個帳號 POST 刷卡空資料、PATCH 角色均回 403，無資料新增或異動。
 - [x] 正式 Netlify 環境的 Supabase URL、公開 key 與伺服器 key 已保存並核對，前端 bundle 未包含伺服器 key。
 
 ## 後續可調校
@@ -90,5 +90,5 @@
 - [ ] 公司 IP 限制須有可信任伺服器驗證，未完成前不得宣稱已生效。
 
 - [x] 2026-11-12 正式提交 7fef8e7、Netlify production 部署 ready；Android Chromium、iPhone WebKit、桌面 Chromium 共六組帳號登入／重整／登出測試通過，沒有建立真實員工刷卡紀錄。
-- [ ] Supabase SQL Editor 的自動輸入沒有同步至編輯器模型；002 尚未執行，須由使用者手動貼上與 Run。
+- [x] 2026-11-12 已改用同一瀏覽器的真正剪貼簿貼上並執行 002，Supabase 顯示 Success. No rows returned；補強後 Auth、自己的 profiles 及後端快照查詢均為 200，直接寫入為 403。
 - [ ] 原 ADMIN 僅為本機備份入口，搬移與雲端管理接線完成後移除此分支。
