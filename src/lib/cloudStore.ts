@@ -16,7 +16,7 @@ export async function cloudRequest<T>(body?: Record<string, unknown>): Promise<T
       signal: controller.signal,
     })
     const result = await response.json().catch(() => null)
-    if (!response.ok || !result) throw new Error(result?.message || '雲端資料服務尚未就緒，請聯絡管理者。')
+    if (!response.ok || !result) throw Object.assign(new Error(result?.message || '雲端資料服務尚未就緒，請聯絡管理者。'), { status: response.status })
     return result as T
   } finally { window.clearTimeout(timer) }
 }

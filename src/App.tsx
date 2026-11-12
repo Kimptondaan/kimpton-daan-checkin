@@ -135,8 +135,15 @@ function App() {
         if (!employee?.active) { await logout(); return }
         setCloudData(snapshot)
         setSession({ role: employee.accessRole ?? 'employee', employee })
-      } catch {
-        // No false success or local fallback on network failures.
+      } catch (error) {
+        if (!alive) return
+        const status = (error as { status?: number }).status
+        if (status === 401 || status === 403) {
+          await logout()
+          setLoginError(error instanceof Error ? error.message : '登入已失效，請重新登入。')
+        } else {
+          notify('雲端資料更新失敗，目前顯示上次讀取結果；請檢查網路。', 'error')
+        }
       }
     }
     const timer = window.setInterval(() => { void refresh() }, 15000)
