@@ -338,3 +338,9 @@ button { min-height: 40px; }
     min-width: 0;
   }
 }
+
+/* Authentication feedback must be visible on desktop and mobile. */
+.login-error { margin: 0; padding: 12px 14px; border: 1px solid #d5a99f; border-radius: 6px; background: #fff0ed; color: #963b31; font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
+.login-button:disabled { opacity: .65; }
+.punch-card:disabled { opacity: .7; cursor: wait; }
+@media (max-width: 600px) { .login-form input { font-size: 16px; } }

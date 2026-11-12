@@ -30,7 +30,6 @@ import {
 } from 'lucide-react'
 import type { AttendanceRecord, Department, Employee, NetworkMode, UserRole } from './lib/types'
 import {
-  createRecord,
   formatDate,
   formatDateTime,
   isSameDay,
@@ -41,6 +40,7 @@ import {
   type DemoData,
 } from './lib/demoStore'
 import { supabase, supabaseReady } from './lib/supabase'
+import { loadCloudData, punchCloud } from './lib/cloudStore'
 
 const DEFAULT_PASSWORD = '00000000'
 
@@ -52,7 +52,12 @@ type NewDepartment = Pick<Department, 'code' | 'name' | 'manager'>
 type Toast = { tone: 'success' | 'error' | 'info'; message: string }
 
 function App() {
-  const [data, setData] = useState<DemoData>(() => loadDemoData())
+  const [legacyData, setData] = useState<DemoData>(() => loadDemoData())
+  const [cloudData, setCloudData] = useState<DemoData | null>(null)
+  const data = cloudData ?? legacyData
+  const [loginBusy, setLoginBusy] = useState(false)
+  const [loginError, setLoginError] = useState('')
+  const [punchBusy, setPunchBusy] = useState(false)
   const [session, setSession] = useState<Session | null>(null)
   const [loginMode, setLoginMode] = useState<UserRole>('employee')
   const [employeeNo, setEmployeeNo] = useState('')
@@ -65,8 +70,9 @@ function App() {
   const [networkModeDraft, setNetworkModeDraft] = useState<NetworkMode>(data.network.mode)
 
   useEffect(() => {
-    saveDemoData(data)
-  }, [data])
+    // Preserve the old desktop backup; never overwrite it with a cloud snapshot.
+    saveDemoData(legacyData)
+  }, [legacyData])
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000)
@@ -81,66 +87,131 @@ function App() {
 
   const notify = (message: string, tone: Toast['tone'] = 'success') => setToast({ message, tone })
 
+  async function openCloudSession(userId: string) {
+    if (!supabase) throw new Error('網站的 Supabase 連線設定尚未完成。')
+    const { data: profile, error } = await supabase.from('profiles')
+      .select('id, employee_no, full_name, department_id, job_title, role, is_active')
+      .eq('id', userId).maybeSingle()
+    if (error) throw new Error('員工權限讀取失敗，請聯絡管理者。')
+    if (!profile) throw new Error('雲端員工資料尚未建立，請聯絡管理者完成搬移。')
+    if (!profile.is_active) throw new Error('此帳號已停用，請聯絡管理者。')
+    const snapshot = await loadCloudData()
+    const employee = snapshot.employees.find(item => item.id === profile.id)
+    if (!employee) throw new Error('找不到自己的雲端員工資料。')
+    setCloudData(snapshot)
+    setNetworkDraft(snapshot.network.allowedIps.join('\n'))
+    setNetworkModeDraft(snapshot.network.mode)
+    setSession({ role: employee.accessRole ?? 'employee', employee })
+    setActiveView('dashboard')
+  }
+
+  useEffect(() => {
+    if (!supabase) return
+    let alive = true
+    void supabase.auth.getSession().then(async ({ data: auth }) => {
+      if (!alive || !auth.session) return
+      setLoginBusy(true)
+      try { await openCloudSession(auth.session.user.id) }
+      catch (error) {
+        if (alive) setLoginError(error instanceof Error ? error.message : '登入狀態已失效，請重新登入。')
+        await supabase?.auth.signOut()
+      } finally { if (alive) setLoginBusy(false) }
+    })
+    const { data: listener } = supabase.auth.onAuthStateChange(event => {
+      if (event === 'SIGNED_OUT' && alive) { setSession(null); setCloudData(null) }
+    })
+    return () => { alive = false; listener.subscription.unsubscribe() }
+  }, [])
+
+  useEffect(() => {
+    if (!cloudData || !session?.employee) return
+    let alive = true
+    const refresh = async () => {
+      if (document.visibilityState !== 'visible') return
+      try {
+        const snapshot = await loadCloudData()
+        if (!alive) return
+        const employee = snapshot.employees.find(item => item.id === session.employee?.id)
+        if (!employee?.active) { await logout(); return }
+        setCloudData(snapshot)
+        setSession({ role: employee.accessRole ?? 'employee', employee })
+      } catch {
+        // No false success or local fallback on network failures.
+      }
+    }
+    const timer = window.setInterval(() => { void refresh() }, 15000)
+    window.addEventListener('focus', refresh)
+    return () => { alive = false; window.clearInterval(timer); window.removeEventListener('focus', refresh) }
+  }, [Boolean(cloudData), session?.employee?.id])
+
   async function handleLogin(event: React.FormEvent) {
     event.preventDefault()
+    if (loginBusy) return
     const normalized = employeeNo.trim().toUpperCase()
-    if (loginMode === 'admin') {
-      if (normalized !== 'ADMIN') {
-        notify('管理者帳號請輸入 ADMIN', 'error')
-        return
-      }
-      if (password !== data.adminPassword) {
-        notify('管理者密碼不正確', 'error')
-        return
-      }
-      setSession({ role: 'admin' })
-      setActiveView('dashboard')
-      notify('管理者登入成功，歡迎回來', 'success')
-      return
-    }
-
-    const localEmployee = data.employees.find((item) => item.employeeNo === normalized && item.active)
-    if (localEmployee && password === (localEmployee.password ?? DEFAULT_PASSWORD)) {
-      setSession({ role: localEmployee.accessRole ?? 'employee', employee: localEmployee })
-      setActiveView('dashboard')
-      notify(`早安，${localEmployee.name}，今天也辛苦了`, 'success')
-      return
-    }
-    if (supabase) {
-      const email = `${normalized.toLowerCase()}@checkin.kimptondaan.local`
-      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password })
-      if (!authError && authData.user) {
-        const { data: profile, error: profileError } = await supabase.from('profiles').select('id, employee_no, full_name, department_id, job_title, role, is_active').eq('id', authData.user.id).maybeSingle()
-        if (!profileError && profile?.is_active) {
-          const cloudEmployee: Employee = { id: profile.id, employeeNo: profile.employee_no, name: profile.full_name, department: '', departmentCode: '', title: profile.job_title ?? '', active: true, accessRole: profile.role }
-          setSession({ role: cloudEmployee.accessRole ?? 'employee', employee: cloudEmployee })
-          setActiveView('dashboard')
-          notify(`早安，${cloudEmployee.name}，今天也辛苦了`, 'success')
+    setLoginError('')
+    if (!normalized || !password) { setLoginError('請輸入帳號與密碼。'); return }
+    if (!/^[A-Z0-9_-]+$/.test(normalized)) { setLoginError('員工編號格式不正確。'); return }
+    if (!supabase) { setLoginError('網站的 Supabase 連線設定尚未完成，請聯絡管理者。'); return }
+    setLoginBusy(true)
+    try {
+      const { data: auth, error } = await supabase.auth.signInWithPassword({
+        email: `${normalized.toLowerCase()}@checkin.kimptondaan.local`, password,
+      })
+      if (error || !auth.user) {
+        // A temporary, local-only backup entrance. It grants no cloud privileges.
+        // Remove this branch after the original ADMIN account has been migrated.
+        if (loginMode === 'admin' && normalized === 'ADMIN' && password === legacyData.adminPassword && error?.code === 'invalid_credentials') {
+          setCloudData(null)
+          setSession({ role: 'admin' })
+          setActiveView('settings')
+          setPassword('')
+          notify('這是原桌面資料備份入口；請下載備份完成搬移。', 'info')
           return
         }
-        await supabase.auth.signOut()
+        throw new Error(error?.status === 400 || error?.code === 'invalid_credentials'
+          ? '員工編號或密碼不正確，請確認帳號已搬移至雲端。'
+          : '登入服務暫時無法連線，請檢查網路後再試。')
       }
-    }
-    notify(localEmployee ? '員工密碼不正確，請洽管理者重設' : '找不到這個員工編號或密碼不正確，請確認後再試', 'error')
+      await openCloudSession(auth.user.id)
+      setPassword('')
+      notify('雲端登入成功，歡迎回來。')
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : '登入失敗，請稍後再試。')
+      await supabase.auth.signOut().catch(() => {})
+    } finally { setLoginBusy(false) }
   }
 
-  function logout() {
+  async function logout() {
     setSession(null)
+    setCloudData(null)
     setEmployeeNo('')
     setPassword('')
+    setLoginError('')
     setMobileNavOpen(false)
+    await supabase?.auth.signOut()
   }
 
-  function handlePunch(type: 'check_in' | 'check_out') {
-    if (!session?.employee) return
-    const record = createRecord(session.employee.id, type, data.network)
-    setData((current) => ({ ...current, records: [record, ...current.records] }))
-    notify(type === 'check_in' ? '上班刷卡完成，可再次刷卡補留時間' : '下班刷卡完成，可再次刷卡補留時間')
+  async function handlePunch(type: 'check_in' | 'check_out') {
+    if (!session?.employee || punchBusy) return
+    if (!cloudData) { notify('請先完成資料搬移，不能在本機留下正式刷卡紀錄。', 'error'); return }
+    setPunchBusy(true)
+    try {
+      await punchCloud(type)
+      notify(type === 'check_in' ? '上班刷卡已儲存至雲端，可再次刷卡。' : '下班刷卡已儲存至雲端，可再次刷卡。')
+      try { setCloudData(await loadCloudData()) }
+      catch { notify('刷卡已儲存，但畫面更新失敗，請重新整理查看；不需要重刷。', 'info') }
+    } catch (error) { notify(error instanceof Error ? error.message : '刷卡未儲存成功。', 'error') }
+    finally { setPunchBusy(false) }
+  }
+
+  function blockPendingManagement() {
+    notify('員工與管理資料尚未完成搬移，暫停新增及異動；請先下載原桌面資料備份。', 'error')
+    return true
   }
 
   function exportAttendance(records: DemoData['records'] = filteredRecords) {
     const txt = toTxt(records, data.employees)
-    const blob = new Blob(['\uFEFF', txt], { type: 'text/plain;charset=utf-8;' })
+    const blob = new Blob([txt], { type: 'text/plain;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
@@ -151,6 +222,7 @@ function App() {
   }
 
   function saveNetworkSettings() {
+    if (blockPendingManagement()) return
     const ips = networkDraft
       .split(/[\n,]/)
       .map((item) => item.trim())
@@ -167,6 +239,7 @@ function App() {
   }
 
   function resetDemo() {
+    if (blockPendingManagement()) return
     const fresh = resetDemoData()
     setData(fresh)
     setNetworkDraft('')
@@ -175,6 +248,7 @@ function App() {
   }
 
   function updateEmployee(id: string, field: keyof Employee, value: string) {
+    if (blockPendingManagement()) return
     const nextValue = field === 'employeeNo' ? value.trim().toUpperCase() : value
     if (field === 'employeeNo' && data.employees.some((employee) => employee.id !== id && employee.employeeNo === nextValue)) {
       notify('員工編號已存在，請輸入其他編號', 'error')
@@ -194,6 +268,7 @@ function App() {
   }
 
   function addEmployee(input: NewEmployee) {
+    if (blockPendingManagement()) return
     const department = data.departments.find((item) => item.code === input.departmentCode)
     const newEmployee: Employee = {
       id: `emp-${Date.now()}`,
@@ -219,6 +294,7 @@ function App() {
   }
 
   function importEmployees(rows: string[][]) {
+    if (blockPendingManagement()) return
     const validRoles: UserRole[] = ['employee', 'manager', 'hr', 'it', 'admin']
     const existingNumbers = new Set(data.employees.map((employee) => employee.employeeNo))
     const imported: Employee[] = []
@@ -241,11 +317,13 @@ function App() {
   }
 
   function toggleEmployeeActive(id: string) {
+    if (blockPendingManagement()) return
     setData((current) => ({ ...current, employees: current.employees.map((employee) => employee.id === id ? { ...employee, active: !employee.active } : employee) }))
     notify('帳號狀態已更新')
   }
 
   function addAttendanceRecord(input: { employeeId: string; type: AttendanceRecord['type']; punchedAt: string }) {
+    if (blockPendingManagement()) return
     if (!input.employeeId || !input.punchedAt) {
       notify('員工與刷卡時間都是必填欄位', 'error')
       return
@@ -256,11 +334,13 @@ function App() {
   }
 
   function updateAttendanceRecord(id: string, patch: Partial<Pick<AttendanceRecord, 'type' | 'punchedAt'>>) {
+    if (blockPendingManagement()) return
     setData((current) => ({ ...current, records: current.records.map((record) => record.id === id ? { ...record, ...patch } : record) }))
     notify('刷卡時間資料已更新')
   }
 
   function addDepartment(input: NewDepartment) {
+    if (blockPendingManagement()) return
     const code = input.code.trim().toUpperCase()
     const name = input.name.trim()
     const manager = input.manager.trim()
@@ -280,6 +360,7 @@ function App() {
   }
 
   function updateDepartment(id: string, field: keyof Department, value: string) {
+    if (blockPendingManagement()) return
     setData((current) => {
       const existing = current.departments.find((department) => department.id === id)
       if (!existing) return current
@@ -299,6 +380,7 @@ function App() {
   }
 
   function updatePassword(accountId: string, nextPassword: string) {
+    if (blockPendingManagement()) return false
     const value = nextPassword.trim()
     if (value.length < 6) {
       notify('密碼至少需要 6 個字元', 'error')
@@ -316,7 +398,7 @@ function App() {
   const filteredRecords = useMemo(() => data.records, [data.records])
 
   if (!session) {
-    return <LoginPage {...{ loginMode, setLoginMode, employeeNo, setEmployeeNo, password, setPassword, handleLogin, data }} />
+    return <LoginPage {...{ loginMode, setLoginMode, employeeNo, setEmployeeNo, password, setPassword, handleLogin, data, loginBusy, loginError }} />
   }
 
   if (session.role === 'employee' && session.employee) {
@@ -328,6 +410,7 @@ function App() {
         activeView={activeView}
         setActiveView={setActiveView}
         handlePunch={handlePunch}
+        punchBusy={punchBusy}
         exportAttendance={exportAttendance}
         logout={logout}
         toast={toast}
@@ -377,6 +460,8 @@ function LoginPage(props: {
   setPassword: (value: string) => void
   handleLogin: (event: React.FormEvent) => void | Promise<void>
   data: DemoData
+  loginBusy: boolean
+  loginError: string
 }) {
   return (
     <main className="login-page">
@@ -406,26 +491,28 @@ function LoginPage(props: {
         <form className="login-form" onSubmit={props.handleLogin}>
           <label>
             <span>{props.loginMode === 'admin' ? '管理者帳號' : '員工編號'}</span>
-            <div className="input-wrap"><UserRound size={18} /><input value={props.employeeNo} onChange={(event) => props.setEmployeeNo(event.target.value)} autoComplete="username" /></div>
+            <div className="input-wrap"><UserRound size={18} /><input disabled={props.loginBusy} autoCapitalize="none" spellCheck={false} value={props.employeeNo} onChange={(event) => props.setEmployeeNo(event.target.value)} autoComplete="username" /></div>
           </label>
           <label>
             <span>登入密碼</span>
-            <div className="input-wrap"><KeyRound size={18} /><input type="password" value={props.password} onChange={(event) => props.setPassword(event.target.value)} autoComplete="current-password" /></div>
+            <div className="input-wrap"><KeyRound size={18} /><input type="password" disabled={props.loginBusy} value={props.password} onChange={(event) => props.setPassword(event.target.value)} autoComplete="current-password" /></div>
           </label>
-          <button className="primary-button login-button" type="submit">進入系統 <ChevronRight size={18} /></button>
+          <button className="primary-button login-button" type="submit" disabled={props.loginBusy} aria-busy={props.loginBusy}>{props.loginBusy ? '登入中…' : '進入系統'} <ChevronRight size={18} /></button>
+          {props.loginError && <p className="login-error" role="alert">{props.loginError}</p>}
         </form>
       </section>
     </main>
   )
 }
 
-function EmployeePortal({ employee, data, now, activeView, setActiveView, handlePunch, exportAttendance, logout, toast }: {
+function EmployeePortal({ employee, data, now, activeView, setActiveView, handlePunch, punchBusy, exportAttendance, logout, toast }: {
   employee: Employee
   data: DemoData
   now: Date
   activeView: View
   setActiveView: (value: View) => void
   handlePunch: (type: 'check_in' | 'check_out') => void
+  punchBusy: boolean
   exportAttendance: (records?: DemoData['records']) => void
   logout: () => void
   toast: Toast | null
@@ -453,7 +540,7 @@ function EmployeePortal({ employee, data, now, activeView, setActiveView, handle
         </aside>
         <main className="employee-main">
           <div className="page-heading"><div><p className="eyebrow">EMPLOYEE PORTAL</p><h1>{activeView === 'dashboard' ? '今天，從容開始。' : '我的刷卡紀錄'}</h1><p className="muted">{formatDate(now.toISOString())} · {now.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</p></div></div>
-          {activeView === 'dashboard' ? <EmployeeDashboard {...{ employee, data, now, didCheckIn, didCheckOut, handlePunch }} /> : <PersonalRecords records={latestRecords} allRecords={data.records.filter((record) => record.employeeId === employee.id)} exportAttendance={exportAttendance} />}
+          {activeView === 'dashboard' ? <EmployeeDashboard {...{ employee, data, now, didCheckIn, didCheckOut, handlePunch, punchBusy }} /> : <PersonalRecords records={latestRecords} allRecords={data.records.filter((record) => record.employeeId === employee.id)} exportAttendance={exportAttendance} />}
         </main>
       </div>
       {toast && <ToastMessage toast={toast} />}
@@ -461,7 +548,7 @@ function EmployeePortal({ employee, data, now, activeView, setActiveView, handle
   )
 }
 
-function EmployeeDashboard({ employee, data, now, didCheckIn, didCheckOut, handlePunch }: { employee: Employee; data: DemoData; now: Date; didCheckIn: boolean; didCheckOut: boolean; handlePunch: (type: 'check_in' | 'check_out') => void }) {
+function EmployeeDashboard({ employee, data, now, didCheckIn, didCheckOut, handlePunch, punchBusy }: { employee: Employee; data: DemoData; now: Date; didCheckIn: boolean; didCheckOut: boolean; handlePunch: (type: 'check_in' | 'check_out') => void; punchBusy: boolean }) {
   const todayRecords = data.records.filter((record) => record.employeeId === employee.id && isSameDay(record.punchedAt))
   const checkIn = todayRecords.find((record) => record.type === 'check_in')
   const checkOut = todayRecords.find((record) => record.type === 'check_out')
@@ -472,11 +559,11 @@ function EmployeeDashboard({ employee, data, now, didCheckIn, didCheckOut, handl
         <div className="hero-date"><span>{now.toLocaleDateString('zh-TW', { month: 'long', day: 'numeric' })}</span><strong>{now.toLocaleDateString('zh-TW', { weekday: 'long' })}</strong></div>
       </section>
       <section className="punch-grid">
-        <button className={`punch-card check-in ${didCheckIn ? 'done' : ''}`} onClick={() => handlePunch('check_in')}>
+        <button className={`punch-card check-in ${didCheckIn ? 'done' : ''}`} disabled={punchBusy} aria-busy={punchBusy} onClick={() => handlePunch('check_in')}>
           <div className="punch-card-top"><span className="punch-index">01</span><span className="punch-state">{didCheckIn ? '已完成' : '尚未刷卡'}</span></div>
           <div className="punch-icon"><ArrowDownToLine size={25} /></div><h3>上班刷卡</h3><p>{checkIn ? `最近一次 ${formatDateTime(checkIn.punchedAt)}` : '記錄你的到班時間'}</p><span className="punch-action">再次刷卡 <ChevronRight size={17} /></span>
         </button>
-        <button className={`punch-card check-out ${didCheckOut ? 'done' : ''}`} onClick={() => handlePunch('check_out')}>
+        <button className={`punch-card check-out ${didCheckOut ? 'done' : ''}`} disabled={punchBusy} aria-busy={punchBusy} onClick={() => handlePunch('check_out')}>
           <div className="punch-card-top"><span className="punch-index">02</span><span className="punch-state">{didCheckOut ? '已完成' : '尚未刷卡'}</span></div>
           <div className="punch-icon"><ArrowLeft size={25} /></div><h3>下班刷卡</h3><p>{checkOut ? `最近一次 ${formatDateTime(checkOut.punchedAt)}` : '結束班次時記得刷卡'}</p><span className="punch-action">再次刷卡 <ChevronRight size={17} /></span>
         </button>
@@ -651,7 +738,7 @@ function SettingsAdmin({ data, readOnly, networkDraft, setNetworkDraft, networkM
     link.click()
     URL.revokeObjectURL(url)
   }
-  return <div className="settings-grid"><section className="content-card settings-card"><div className="card-heading"><div><p className="eyebrow">NETWORK ACCESS</p><h2>公司網路限制</h2><p className="muted">正式串接後，打卡請求會由伺服器檢查來源公網 IP，不信任瀏覽器自行傳入的 IP。</p></div><div className={`large-status ${networkModeDraft === 'test' ? 'test' : 'strict'}`}>{networkModeDraft === 'test' ? <CircleAlert size={20} /> : <ShieldCheck size={20} />}<span>{networkModeDraft === 'test' ? '測試模式' : '正式模式'}</span></div></div><div className="mode-choice"><button className={networkModeDraft === 'test' ? 'selected' : ''} disabled={readOnly} onClick={() => setNetworkModeDraft('test')}><div className="choice-radio" /><div><strong>測試模式</strong><small>暫不限制 IP，方便目前畫面與流程調校。</small></div></button><button className={networkModeDraft === 'strict' ? 'selected' : ''} disabled={readOnly} onClick={() => setNetworkModeDraft('strict')}><div className="choice-radio" /><div><strong>正式 IP 模式</strong><small>只允許下方列出的公司固定公網 IP 打卡。</small></div></button></div><label className="settings-label"><span>允許的固定公網 IP</span><textarea rows={4} value={networkDraft} disabled={readOnly} onChange={(event) => setNetworkDraft(event.target.value)} placeholder="例如：203.0.113.25\n每行一組 IP，也可用逗號分隔" /></label><div className="settings-hint"><Globe2 size={17} /><div><strong>目前儲存狀態</strong><span>{data.network.allowedIps.length ? `已設定 ${data.network.allowedIps.length} 組 IP · 最近更新 ${formatDateTime(data.network.updatedAt)}` : '尚未設定正式 IP。系統目前不會擋下預覽刷卡。'}</span></div></div><div className="form-actions">{!readOnly && <button className="primary-button" onClick={saveNetworkSettings}><Check size={16} />儲存網路設定</button>}</div></section><section className="content-card settings-card secondary-settings"><div className="card-heading"><div><p className="eyebrow">ACCOUNT SECURITY</p><h2>管理者密碼</h2><p className="muted">目前預覽帳號為 ADMIN。修改後請使用新密碼登入。</p></div><KeyRound size={21} /></div>{!readOnly && <><label className="settings-label"><span>設定 ADMIN 新密碼</span><input className="settings-password-input" type="password" value={adminPassword} onChange={(event) => setAdminPassword(event.target.value)} placeholder="至少 6 個字元" /></label><button className="primary-button settings-save-button" onClick={() => { if (updatePassword('admin', adminPassword)) setAdminPassword('') }}><KeyRound size={15} />儲存管理者密碼</button></>}<div className="card-heading connection-heading"><div><p className="eyebrow">SUPABASE CONNECTION</p><h2>資料服務狀態</h2></div><div className={`connection-dot ${supabaseReady ? 'ready' : ''}`} /></div><div className="connection-row"><span>前端連線</span><strong>{supabaseReady ? '已偵測環境變數' : '尚未設定 Supabase Key'}</strong></div><div className="connection-row"><span>目前資料層</span><strong>{supabaseReady ? 'Supabase client' : '瀏覽器預覽資料'}</strong></div><p className="settings-copy">此預覽版本先用瀏覽器儲存資料。正式上線前，密碼必須交由 Supabase Auth 與管理者 Edge Function 安全處理。</p><button className="secondary-button" onClick={exportPreviewBackup}><Download size={15} />下載預覽資料備份</button>{!readOnly && <button className="danger-button" onClick={resetDemo}><X size={15} />重設預覽資料</button>}</section></div>
+  return <div className="settings-grid"><section className="content-card settings-card"><div className="card-heading"><div><p className="eyebrow">NETWORK ACCESS</p><h2>公司網路限制</h2><p className="muted">正式串接後，打卡請求會由伺服器檢查來源公網 IP，不信任瀏覽器自行傳入的 IP。</p></div><div className={`large-status ${networkModeDraft === 'test' ? 'test' : 'strict'}`}>{networkModeDraft === 'test' ? <CircleAlert size={20} /> : <ShieldCheck size={20} />}<span>{networkModeDraft === 'test' ? '測試模式' : '正式模式'}</span></div></div><div className="mode-choice"><button className={networkModeDraft === 'test' ? 'selected' : ''} disabled={readOnly} onClick={() => setNetworkModeDraft('test')}><div className="choice-radio" /><div><strong>測試模式</strong><small>暫不限制 IP，方便目前畫面與流程調校。</small></div></button><button className={networkModeDraft === 'strict' ? 'selected' : ''} disabled={readOnly} onClick={() => setNetworkModeDraft('strict')}><div className="choice-radio" /><div><strong>正式 IP 模式</strong><small>只允許下方列出的公司固定公網 IP 打卡。</small></div></button></div><label className="settings-label"><span>允許的固定公網 IP</span><textarea rows={4} value={networkDraft} disabled={readOnly} onChange={(event) => setNetworkDraft(event.target.value)} placeholder="例如：203.0.113.25\n每行一組 IP，也可用逗號分隔" /></label><div className="settings-hint"><Globe2 size={17} /><div><strong>目前儲存狀態</strong><span>{data.network.allowedIps.length ? `已設定 ${data.network.allowedIps.length} 組 IP · 最近更新 ${formatDateTime(data.network.updatedAt)}` : '尚未設定正式 IP。系統目前不會擋下預覽刷卡。'}</span></div></div><div className="form-actions">{!readOnly && <button className="primary-button" onClick={saveNetworkSettings}><Check size={16} />儲存網路設定</button>}</div></section><section className="content-card settings-card secondary-settings"><div className="card-heading"><div><p className="eyebrow">ACCOUNT SECURITY</p><h2>管理者密碼</h2><p className="muted">目前預覽帳號為 ADMIN。修改後請使用新密碼登入。</p></div><KeyRound size={21} /></div>{!readOnly && <><label className="settings-label"><span>設定 ADMIN 新密碼</span><input className="settings-password-input" type="password" value={adminPassword} onChange={(event) => setAdminPassword(event.target.value)} placeholder="至少 6 個字元" /></label><button className="primary-button settings-save-button" onClick={() => { if (updatePassword('admin', adminPassword)) setAdminPassword('') }}><KeyRound size={15} />儲存管理者密碼</button></>}<div className="card-heading connection-heading"><div><p className="eyebrow">SUPABASE CONNECTION</p><h2>資料服務狀態</h2></div><div className={`connection-dot ${supabaseReady ? 'ready' : ''}`} /></div><div className="connection-row"><span>前端連線</span><strong>{supabaseReady ? '已偵測環境變數' : '尚未設定 Supabase Key'}</strong></div><div className="connection-row"><span>目前資料層</span><strong>{'管理資料搬移中'}</strong></div><p className="settings-copy">雲端員工登入已接線。原桌面員工與部門資料仍需搬移，管理資料暫停新增及異動；請下載備份完成搬移。</p><button className="secondary-button" onClick={exportPreviewBackup}><Download size={15} />下載預覽資料備份</button>{!readOnly && <button className="danger-button" onClick={resetDemo}><X size={15} />重設預覽資料</button>}</section></div>
 }
 
 function EmptyState({ title, detail }: { title: string; detail: string }) { return <div className="empty-state"><div className="empty-icon"><FileSpreadsheet size={20} /></div><strong>{title}</strong><span>{detail}</span></div> }
