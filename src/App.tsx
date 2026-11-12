@@ -114,7 +114,7 @@ function App() {
       try { await openCloudSession(auth.session.user.id) }
       catch (error) {
         if (alive) setLoginError(error instanceof Error ? error.message : '登入狀態已失效，請重新登入。')
-        await supabase?.auth.signOut()
+        await supabase?.auth.signOut({ scope: 'local' })
       } finally { if (alive) setLoginBusy(false) }
     })
     const { data: listener } = supabase.auth.onAuthStateChange(event => {
@@ -158,7 +158,16 @@ function App() {
     setLoginError('')
     if (!normalized || !password) { setLoginError('請輸入帳號與密碼。'); return }
     if (!/^[A-Z0-9_-]+$/.test(normalized)) { setLoginError('員工編號格式不正確。'); return }
-    if (!supabase) { setLoginError('網站的 Supabase 連線設定尚未完成，請聯絡管理者。'); return }
+    if (!supabase) {
+      if (loginMode === 'admin' && normalized === 'ADMIN' && password === legacyData.adminPassword) {
+        setCloudData(null)
+        setSession({ role: 'admin' })
+        setActiveView('settings')
+        setPassword('')
+        notify('這是原桌面資料備份入口；請下載備份完成搬移。', 'info')
+      } else setLoginError('網站的 Supabase 連線設定尚未完成，請聯絡管理者。')
+      return
+    }
     setLoginBusy(true)
     try {
       const { data: auth, error } = await supabase.auth.signInWithPassword({
@@ -184,18 +193,22 @@ function App() {
       notify('雲端登入成功，歡迎回來。')
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : '登入失敗，請稍後再試。')
-      await supabase.auth.signOut().catch(() => {})
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
     } finally { setLoginBusy(false) }
   }
 
   async function logout() {
+    const result = await supabase?.auth.signOut({ scope: 'local' })
+    if (result?.error) {
+      notify('登出未完成，請檢查網路後重試。', 'error')
+      return
+    }
     setSession(null)
     setCloudData(null)
     setEmployeeNo('')
     setPassword('')
     setLoginError('')
     setMobileNavOpen(false)
-    await supabase?.auth.signOut()
   }
 
   async function handlePunch(type: 'check_in' | 'check_out') {
