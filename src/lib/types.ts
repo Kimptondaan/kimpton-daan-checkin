@@ -19,6 +19,7 @@ export interface Department {
   code: string
   name: string
   manager: string
+  managerId?: string
   active: boolean
 }
 
@@ -41,7 +42,6 @@ export interface NetworkSettings {
 export interface DemoData {
   employees: Employee[]
   departments: Department[]
-  adminPassword: string
   records: AttendanceRecord[]
   network: NetworkSettings
 }

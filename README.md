@@ -2,39 +2,53 @@
 
 ## 目前狀態（2026-11-12）
 
-前端登入已使用 Supabase Auth；雲端登入後，員工與出勤資料由 Netlify 後端讀取 Supabase。登入欄位初始空白，失敗直接顯示原因，登出只清除本裝置的登入。前端不以 localStorage 的員工密碼代替雲端驗證。
+原桌面備份的 **9 個部門、9 位員工、4 筆刷卡紀錄及 ADMIN 帳號**已搬移至 Supabase。已核對員工姓名、編號、部門、職稱、角色、啟用狀態與原刷卡時間，並逐一驗證 10 個雲端帳號可使用原密碼登入；既有雲端密碼沒有重設。主管姓名中有 3 個唯一對應員工，6 個舊自由文字姓名沒有對應，保留原文，不自行猜測指派。
 
-這仍是資料搬移中的版本，尚未完成全系統正式上線。原桌面建立的部門、員工、管理者與刷卡紀錄，需要透過原桌面瀏覽器匯出的 JSON 備份搬移。目前管理新增／異動已暫停，避免再產生只存在單一裝置的資料；本機 ADMIN 僅保留原資料查看及備份入口，不具有雲端管理權限。
-
-雲端登入帳號格式為 `{員工編號小寫}@checkin.kimptondaan.local`，profiles.id 必須等於 Auth user UUID。這是系統內部帳號映射，不是用來收信的電子郵件。
+**003_cloud_management.sql 已在遠端成功執行並核對結構與權限，新管理版尚待完成所有角色刷卡入口、正式部署及整合測試。** 直接瀏覽器修改角色、刷卡及管理 RPC 均回 403，匿名 RPC 回 401（預期保護）。原 9/9/4 及 10 個登入帳號再核對完整。使用者新增要求：IT、HR、部門主管與 Admin 同樣是員工，所有角色均需要自己刷卡與個人紀錄入口，不能靠提升權限處理。
 
 ## 程式結構
 
-- `src/App.tsx`：登入、個人刷卡、管理介面、篩選與 TXT 下載。
-- `src/lib/supabase.ts`：公開 Supabase client 與手機相容的逾時控制。
-- `src/lib/cloudStore.ts`：帶入 Auth access token 呼叫相對路徑 `/api/attendance`。
-- `netlify/functions/attendance-api.mjs`：驗證 token、檢查啟用狀態與角色、範圍限定的資料讀取；刷卡時間取伺服器時間，來源 IP 只信任 Netlify context.ip。
-- `src/lib/demoStore.ts`：保留舊桌面備份資料；雲端快照不會覆寫它。
-- `scripts/migrate_preview_backup.mjs`：具備預檢、dry-run 與穩定來源紀錄 UUID 的一次性搬移腳本，不重設既有雲端密碼。
-- `supabase/migrations`：初始資料結構及禁止瀏覽器直接寫入的權限補強。
+| 路徑 | 用途 |
+| --- | --- |
+| `src/App.tsx` | Supabase 登入、個人刷卡、五級權限管理介面、時間區間與 TXT 下載。 |
+| `src/lib/supabase.ts` | 公開 Supabase client 與手機相容逾時控制。 |
+| `src/lib/cloudStore.ts` | 使用 Auth access token 呼叫 `/api/attendance`；封裝雲端新增、儲存、匯入等動作。 |
+| `src/lib/demoStore.ts` | 檔名保留相容性，內容只剩台北時區格式函數；無示範帳號、密碼、localStorage 寫入或重設。 |
+| `netlify/functions/attendance-api.mjs` | 驗證登入及 active role、限制資料範圍，使用 service role 呼叫交易 RPC；刷卡時間取伺服器時間，IP 只信任 Netlify `context.ip`。 |
+| `scripts/migrate_preview_backup.mjs` | 預檢、dry-run、穩定來源紀錄 UUID 的搬移腳本；不重設既有雲端密碼。 |
+| `supabase/migrations` | 001 初始結構、002 禁止瀏覽器直接寫入、003 雲端管理與網路交易及稽核。 |
+
+登入映射為 `{員工編號小寫}@checkin.kimptondaan.local`，`profiles.id` 等於 Auth user UUID；這是內部登入映射，不是收信用的電子郵件。
+
+## 權限與雲端儲存設計
+
+Admin 可管理員工、部門、角色、帳號狀態、密碼、補登與修改時間、網路設定及所有授權資料下載。HR 可管理員工與部門及非 Admin 角色，不能授予 Admin、重設密碼或修改刷卡時間；系統設定唯讀。IT 在出勤頁提供批次匯入與啟用／停用工具，不提供員工資料、部門或系統管理頁；IT 匯入只能建立一般員工。部門主管只查看與下載自己部門；一般員工只能刷卡及查看／下載自己紀錄。後端和資料庫均驗證角色，不能只依靠隱藏按鈕。
+
+員工與部門修改採單一儲存動作；成功才結束編輯，失敗保留輸入。部門以 UUID 關聯，代號／名稱變更不改員工 UUID 或原紀錄對應。主管選單使用員工 UUID，可不指定，選取主管不會自行提升該員工角色；沒有對應 UUID 的舊姓名可明確保留。
+
+新帳號依使用者指定採初始密碼 `00000000`，由 Supabase Auth 處理密碼，不是本機登入 fallback。正式使用前應修改管理者密碼並制定首次改密碼政策。稽核不保存密碼內容，前端不再提供含密碼的 JSON 預覽備份。
+
+## 自動更新
+
+新管理版部署後，操作成功立即重新讀取雲端。其他可見視窗每 15 秒自動重新查詢，視窗重新取得焦點也會更新；顯示最後成功同步時間。這不是 Supabase Realtime 推播，也不保證零延遲；頁面背景或裝置斷網時不持續更新。管理動作後強制取得寫入之後的新快照，避免在途舊查詢覆蓋新資料；未儲存的網路草稿不被自動更新清空。
+
+## TXT 格式
+
+台北時區（`Asia/Taipei`）每筆一行，依時間升序：`YYYYMMDDHHMM員工編號F1/F2`。上班 F1、下班 F2；無標題、逗號、引號或 UTF-8 BOM，以 CRLF 換行。下載區間以全部已授權紀錄篩選，不被畫面預設「今天」或搜尋偷偷限制。一般員工只下載自己，主管僅自己部門。
 
 ## Netlify 部署
 
-連結 GitHub main，建置命令 `pnpm run build`，輸出目錄 `dist`，函式目錄 `netlify/functions`。設定下列環境變數後須重新部署，不能只儲存變數而不重新建置。
+GitHub main 為正式自動部署來源，建置 `pnpm run build`，輸出 `dist`，函式目錄 `netlify/functions`。必要環境變數為前端公開的 `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`，及後端的 `SUPABASE_URL`（或前者 URL）、`SUPABASE_SERVICE_ROLE_KEY`。伺服器金鑰絕不可加 `VITE_` 或寫入 Git、TXT、前端 bundle。變數更新後須重新部署。
 
-- `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`：前端公開連線設定。Anon／publishable key 本來就會出現在前端程式，授權依靠 RLS 與後端驗證，不靠隱藏此金鑰。
-- `SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`：後端程式讀取的連線設定。伺服器金鑰名稱絕不可加上 `VITE_`，不可寫進原始碼、Git、TXT 或前端 bundle。
+目前已授權 Netlify 設定使用 All scopes；不得將 service key 編入前端，每次交付前檢查 bundle。尚未套 003 時，不能把依賴該 SQL 的新後端推送到正式 main。
 
-目前 Netlify 方案使用 All scopes；Specific scopes 需升級。環境變數只開放 Netlify 帳號與團隊獲授權的管理人員存取。伺服器程式只在執行期讀取 service key，交付前必須檢查前端 bundle 沒有包含該值。
+## 必要順序
 
-## 資料搬移與正式使用前的必要步驟
+1. 001、002 已在 Supabase 執行。原備份搬移與 10 個帳號驗證已完成，不需再提供備份或金鑰。
+2. 003 已在 Supabase SQL Editor 執行成功，服務端管理 RPC、網路模式與稽核已核對；不重建或刪除來源員工、部門、刷卡資料。
+3. 核對新增結構與授權成功後，推送管理版至 GitHub main，確認 Netlify production ready。
+4. 使用專用、可清理的測試帳號驗證 CRUD、角色拒絕、補登、重複刷卡、匯入、停用、TXT 與自動更新；不建立真實員工的測試刷卡。
+5. 公司固定 IP 依原需求先不設定。之後 Admin 設定白名單並啟用正式模式，須在公司 Wi-Fi 和行動網路實測；未知來源 IP 在正式模式必須拒絕。
+6. 完成 DNS 與 TLS 後才使用 `https://checkin.kimptondaan.com`；規劃中的域名不代表已啟用。
 
-1. 在最初建立員工／部門的同一個桌面瀏覽器、同一個網站來源，用原 ADMIN 密碼進入「系統設定」，下載 JSON 備份。不同裝置／不同網址的 localStorage 不是同一份資料；搬移前不要清除瀏覽器儲存。備份含舊版密碼，應視為機密，不可提交 Git 或公開。
-2. 在 Supabase SQL Editor 執行 `001_initial_schema.sql`（已建立時不必重做），再執行 `002_server_only_writes.sql`。後者不刪資料，用來禁止瀏覽器自行偽造時間、修改角色或啟用狀態；已於 2026-11-12 執行成功，瀏覽器直接寫入驗證回 403，正常登入及自己的雲端資料讀取回 200。
-3. 在受保護的環境執行 `node scripts/migrate_preview_backup.mjs --dry-run /private/path/backup.json`，預檢成功後執行 `node scripts/migrate_preview_backup.mjs /private/path/backup.json`。Supabase URL 與 service key 使用環境變數，不放命令列值。錯誤預檢不寫任何雲端資料；跨 Auth 與 REST 的搬移不是資料庫交易，中途失敗應保留備份並按腳本結果恢復，不可假設全部完成。
-4. 接完並驗證管理 CRUD、密碼重設、停用、批次匯入與網路設定；本機管理寫入保持停用直到這些功能真正使用雲端。
-5. 移除本機 ADMIN 備份登入分支，確認五級權限與 TXT 下載範圍；更新舊密碼並制定首次登入改密碼政策。
-6. 設定公司出口 IP 並在公司 Wi-Fi／行動網路實測。現有 schema 以啟用的 allowed_networks 作為白名單：沒有啟用紀錄代表不限制；有紀錄則伺服器要求 IP 符合 CIDR。管理頁的 test/strict 設定尚未接線，不能當作已生效的開關。002 已套用，瀏覽器直接資料表寫入被拒絕；仍須接完管理網路設定並實測固定出口 IP，才能正式採用。
-7. 完成 DNS 與 TLS 才能使用 `https://checkin.kimptondaan.com`；規劃中的域名不代表已啟用。
-
-目前登入後的雲端資料自動重新查詢間隔為 15 秒，視窗重新取得焦點也會更新。這不是 Supabase Realtime；原管理資料尚未搬移及接線前，不能宣稱手機與電腦新增資料已互相同步。
+原備份含舊版密碼，應保持私密且不可提交 Git。保留備份直到核對成功；重複執行搬移前先 dry-run，避免覆蓋之後的人員異動。
