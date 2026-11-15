@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { AttendanceRecord, AttendanceType, DemoData, NetworkCheckResult, NetworkMode } from './types'
+import type { Announcement, AttendanceRecord, AttendanceType, DemoData, NetworkCheckResult, NetworkMode } from './types'
 
 export type EmployeeWrite = {
   employeeNo: string
@@ -38,7 +38,10 @@ export async function cloudRequest<T>(body?: Record<string, unknown>, expectedUs
   } finally { window.clearTimeout(timer) }
 }
 
-export const loadCloudData = () => cloudRequest<DemoData>()
+export async function loadCloudData(): Promise<DemoData> {
+  const snapshot = await cloudRequest<DemoData>()
+  return { ...snapshot, announcement: snapshot.announcement ?? { format: 'text', items: [], version: 0, updatedAt: null, available: false } }
+}
 export const punchCloud = (type: AttendanceType, expectedUserId?: string) => cloudRequest<{ ok: true; recordId: string }>({ action: 'punch', type }, expectedUserId)
 
 export const addEmployeeCloud = (employee: EmployeeWrite) => cloudRequest<{ ok: true; id: string }>({ action: 'employee.create', employee })
@@ -58,3 +61,6 @@ export const addAttendanceCloud = (record: AttendanceWrite) => cloudRequest<{ ok
 export const updateAttendanceCloud = (id: string, patch: Pick<AttendanceRecord, 'type' | 'punchedAt'>) => cloudRequest<{ ok: true }>({ action: 'attendance.update', id, patch })
 export const saveNetworkCloud = (mode: NetworkMode, allowedIps: string[], adminIpExempt?: boolean) => cloudRequest<{ ok: true }>({ action: 'network.save', mode, allowedIps, ...(adminIpExempt === undefined ? {} : { adminIpExempt }) })
 export const checkNetworkCloud = (expectedUserId?: string) => cloudRequest<NetworkCheckResult>({ action: 'network.check' }, expectedUserId)
+
+export const saveAnnouncementCloud = (format: Announcement['format'], items: string[], expectedVersion: number, expectedUserId?: string) =>
+  cloudRequest<{ ok: true; announcement: Announcement }>({ action: 'announcement.save', format, items, expectedVersion }, expectedUserId)

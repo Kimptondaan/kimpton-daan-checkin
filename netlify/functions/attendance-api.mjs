@@ -165,7 +165,7 @@ async function loadNetwork(db) {
 
 async function loadSnapshot(db, profile) {
   const globalRole = ['admin', 'hr', 'it'].includes(profile.role)
-  const [employees, departments, network] = await Promise.all([
+  const [employees, departments, network, announcement] = await Promise.all([
     allRows(() => {
       let query = db
         .from('profiles')
@@ -191,6 +191,7 @@ async function loadSnapshot(db, profile) {
       return query
     }),
     loadNetwork(db),
+    loadAnnouncement(db),
   ])
 
   const managerIds = [...new Set(departments.map((department) => department.manager_id).filter(isUuid))]
@@ -201,7 +202,7 @@ async function loadSnapshot(db, profile) {
     allRows(() => {
       let query = db
         .from('attendance_records')
-        .select('id, employee_id, attendance_type, punched_at, client_ip, status, note, matched_network_id')
+        .select('id, employee_id, attendance_type, punched_at, client_ip, status, note, matched_network_id, user_agent')
         .order('punched_at', { ascending: false })
         .order('id')
       if (!globalRole) {
@@ -248,15 +249,18 @@ async function loadSnapshot(db, profile) {
   return {
     employees: employeeSnapshot,
     departments: departmentSnapshot,
+    announcement,
     records: records.map((record) => ({
       id: record.id,
       employeeId: record.employee_id,
       type: record.attendance_type,
       punchedAt: record.punched_at,
       ip: record.client_ip || '',
-      networkName: network.mode === 'strict' && record.note === 'ADMIN_IP_EXEMPT'
-        ? '管理者 IP 例外'
-        : (record.matched_network_id ? '公司允許網路' : '未限制網路'),
+      networkName: record.user_agent === '管理者補登' || record.status === 'manual'
+        ? ''
+        : (network.mode === 'strict' && record.note === 'ADMIN_IP_EXEMPT'
+          ? '管理者 IP 例外'
+          : (record.matched_network_id ? '公司允許網路' : '未限制網路')),
       // Manual API records are intentionally returned as normal accepted records.
       status: record.status === 'rejected' ? 'rejected' : 'accepted',
     })),
@@ -270,6 +274,59 @@ async function loadSnapshot(db, profile) {
       updatedAt: network.updatedAt,
     },
   }
+}
+
+const UNAVAILABLE_ANNOUNCEMENT = { format: 'text', items: [], version: 0, updatedAt: null, available: false }
+
+async function loadAnnouncement(db) {
+  const { data, error } = await db.from('staff_announcement')
+    .select('format, items, version, updated_at').eq('id', 1).maybeSingle()
+  if (error) {
+    // Keep attendance and login working during the additive migration rollout.
+    if (['42P01', 'PGRST205'].includes(error.code)) return { ...UNAVAILABLE_ANNOUNCEMENT }
+    throw fail('公告讀取失敗，請稍後重試。', 503)
+  }
+  if (!data) return { ...UNAVAILABLE_ANNOUNCEMENT }
+  return { format: data.format, items: data.items, version: data.version, updatedAt: data.updated_at, available: true }
+}
+
+export function validateAnnouncement(input) {
+  if (!['text', 'bullets'].includes(input?.format) || !Array.isArray(input.items)
+    || !Number.isInteger(input.expectedVersion) || input.expectedVersion < 0) {
+    throw fail('公告資料格式不正確。', 400)
+  }
+  if (input.items.length > (input.format === 'text' ? 1 : 5)) {
+    throw fail(input.format === 'text' ? '文字公告只能有1段。' : '條列公告最多5條。', 400)
+  }
+  const items = input.items.map(item => {
+    if (typeof item !== 'string' || item.length > 2000 || item.includes('\u0000')) throw fail('公告內容格式不正確。', 400)
+    const normalized = item.replace(/\r\n?/g, '\n').trim()
+    if (!normalized || (input.format === 'bullets' && normalized.includes('\n'))) {
+      throw fail('條列不可空白或包含換行；清空公告請移除所有條目。', 400)
+    }
+    return normalized
+  })
+  const characters = items.reduce((total, item) => total + Array.from(item.replace(/\n/g, '')).length, 0)
+  if (characters > 200) throw fail('公告總內容最多200字，請自行調整，不會截斷內容。', 400)
+  return { format: input.format, items, expectedVersion: input.expectedVersion }
+}
+
+async function handleAnnouncementSave(db, profile, input) {
+  assertManagementRole(profile, ['admin', 'hr', 'it'], '只有 Admin、HR 主管與 IT 可以修改公告。')
+  const payload = validateAnnouncement(input)
+  const { data, error } = await db.rpc('management_save_announcement', {
+    p_actor_uuid: profile.id, p_format: payload.format,
+    p_items: payload.items, p_expected_version: payload.expectedVersion,
+  })
+  if (error) {
+    if (error.code === '40001') throw fail('公告已被其他管理者更新；草稿仍保留，請取消並重新開啟最新公告後再修改。', 409)
+    if (['PGRST202', '42P01', '55000'].includes(error.code)) throw fail('公告資料庫尚未設定完成，請聯絡管理者。', 503)
+    if (error.code === '22023') throw fail('公告最多200字，條列最多5條且不得空白。', 400)
+    if (['42501', 'P0001'].includes(error.code)) throw fail('公告修改權限不足或帳號已停用。', 403)
+    throw fail('公告未儲存成功，請先檢查最新公告再決定是否重試。', 503)
+  }
+  if (!data?.ok || !data.announcement) throw fail('公告未儲存成功，請稍後再試。', 503)
+  return data
 }
 
 async function handlePunch(db, profile, input, context, request) {
@@ -670,6 +727,7 @@ export default async function handler(request, context) {
       case 'attendance.update': return response(await handleAttendanceUpdate(db, profile, input))
       case 'department.create': return response(await handleDepartmentCreate(db, profile, input))
       case 'department.update': return response(await handleDepartmentUpdate(db, profile, input))
+      case 'announcement.save': return response(await handleAnnouncementSave(db, profile, input))
       case 'network.check': return response(await rpc(db, 'management_network_status', {
         p_actor_uuid: profile.id,
         p_client_ip: trustedClientIp(context),

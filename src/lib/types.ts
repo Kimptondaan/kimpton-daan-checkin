@@ -48,9 +48,18 @@ export interface NetworkCheckResult {
   observedIp: string | null
 }
 
+export interface Announcement {
+  format: 'text' | 'bullets'
+  items: string[]
+  version: number
+  updatedAt: string | null
+  available: boolean
+}
+
 export interface DemoData {
   employees: Employee[]
   departments: Department[]
   records: AttendanceRecord[]
   network: NetworkSettings
+  announcement: Announcement
 }
