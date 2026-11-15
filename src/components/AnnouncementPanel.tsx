@@ -118,7 +118,7 @@ export default function AnnouncementPanel({ announcement, canEdit, saving, onSav
       <h2 id="announcement-panel-title">公告</h2>
       <p className="announcement-updated">最近更新：{formatUpdatedAt(announcement.updatedAt)}</p>
 
-      {!announcement.available ? <p className="announcement-unavailable" role="status">公告功能尚未就緒</p> : editing && canEdit ? <div className="announcement-editor">
+      {!announcement.available ? <p className="announcement-unavailable" role="status">公告資料庫尚未設定完成，暫時無法編輯；員工登入與打卡不受影響。</p> : editing && canEdit ? <div className="announcement-editor">
         <fieldset className="announcement-format" disabled={saving}>
           <legend>公告呈現方式</legend>
           <label><input type="radio" name="announcement-format" value="text" checked={draftFormat === 'text'} onChange={() => { setDraftFormat('text'); setSubmitError('') }} />一般文字</label>
