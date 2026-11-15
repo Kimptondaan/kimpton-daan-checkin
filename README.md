@@ -1,54 +1,62 @@
 # 大安金普頓員工刷卡系統
 
-## 目前狀態（2026-11-12）
+## 目前狀態（2026-11-13）
 
-原桌面備份的 **9 個部門、9 位員工、4 筆刷卡紀錄及 ADMIN 帳號**已搬移至 Supabase。已核對員工姓名、編號、部門、職稱、角色、啟用狀態與原刷卡時間，並逐一驗證 10 個雲端帳號可使用原密碼登入；既有雲端密碼沒有重設。主管姓名中有 3 個唯一對應員工，6 個舊自由文字姓名沒有對應，保留原文，不自行猜測指派。
+原桌面備份的 9 個部門、9 位員工、4 筆出勤及 ADMIN 已搬移至 Supabase；之後新增的資料保留，不重跑舊備份覆蓋人員或密碼。001–004 SQL 均已執行；目前 network_mode 已是 strict，原提供的 5 個 IPv4 中只有 3 個出現在啟用白名單，仍需 Admin 核對並補入其餘 2 個。ADMIN 例外開關已啟用且綁定原帳號 UUID。舊正式版在函式層仍先行檢查 IP，所以目前資料庫例外尚未被現行正式函式遵守；新後端部署後才會採用共用 DB 判定。ADMIN 新密碼由使用者修改，舊預設密碼登入已失敗；開發、部署與測試不重設它。
 
-**003_cloud_management.sql 已在遠端成功執行並核對結構與權限，新管理版尚待完成所有角色刷卡入口、正式部署及整合測試。** 直接瀏覽器修改角色、刷卡及管理 RPC 均回 403，匿名 RPC 回 401（預期保護）。原 9/9/4 及 10 個登入帳號再核對完整。使用者新增要求：IT、HR、部門主管與 Admin 同樣是員工，所有角色均需要自己刷卡與個人紀錄入口，不能靠提升權限處理。
+213c6ad 雲端管理版已正式發布並通過五角色手機入口、管理儲存與 TXT 測試。本次新增 IT／HR／主管登入直接進入自己的刷卡頁、主畫面個人快捷列、持續刷卡結果、本人公網 IP 診斷及秒級同步時間。新版本發布後，先用專用 IT 帳號驗證網路診斷、拒絕回覆與手機／桌面同步。strict 模式目前已生效且僅有 3 個啟用網段；僅在已驗證 Admin 工作階段中核對並補足原提供的 2 個位址。
+
+## 原始碼與部署
+
+- GitHub：https://github.com/Kimptondaan/kimpton-daan-checkin
+- 正式 Netlify 網址：https://lambent-chimera-9ae4a2.netlify.app/
+- 預計自訂網址：`https://checkin.kimptondaan.com`，DNS／TLS 未核對完成前不能視為已啟用。
+- GitHub main 為自動部署來源；`pnpm run build` 輸出 `dist`，函式目錄 `netlify/functions`。
+
+必要公開變數為 `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`；後端使用 `SUPABASE_URL`（或前者 URL）與 `SUPABASE_SERVICE_ROLE_KEY`。伺服器 key 不可加 VITE 前綴、寫入 Git 或前端 bundle。每次交付檢查實際 bundle；環境變數更新需重新部署。
 
 ## 程式結構
 
 | 路徑 | 用途 |
 | --- | --- |
-| `src/App.tsx` | Supabase 登入、個人刷卡、五級權限管理介面、時間區間與 TXT 下載。 |
-| `src/lib/supabase.ts` | 公開 Supabase client 與手機相容逾時控制。 |
-| `src/lib/cloudStore.ts` | 使用 Auth access token 呼叫 `/api/attendance`；封裝雲端新增、儲存、匯入等動作。 |
-| `src/lib/demoStore.ts` | 檔名保留相容性，內容只剩台北時區格式函數；無示範帳號、密碼、localStorage 寫入或重設。 |
-| `netlify/functions/attendance-api.mjs` | 驗證登入及 active role、限制資料範圍，使用 service role 呼叫交易 RPC；刷卡時間取伺服器時間，IP 只信任 Netlify `context.ip`。 |
-| `scripts/migrate_preview_backup.mjs` | 預檢、dry-run、穩定來源紀錄 UUID 的搬移腳本；不重設既有雲端密碼。 |
-| `supabase/migrations` | 001 初始結構、002 禁止瀏覽器直接寫入、003 雲端管理與網路交易及稽核。 |
+| `src/App.tsx` | 登入、所有角色個人刷卡、權限介面、網路診斷、同步、TXT 下載。 |
+| `src/lib/supabase.ts` | 公開 Auth client 與手機相容逾時處理。 |
+| `src/lib/cloudStore.ts` | 帶 Auth token 呼叫相對路徑 `/api/attendance`；不傳用戶自報 IP 作刷卡依據。 |
+| `src/lib/demoStore.ts` | 只保留台北時区格式函式，沒有示範帳號、本機資料或密碼 fallback。 |
+| `netlify/functions/attendance-api.mjs` | 驗證本人與啟用角色、資料範圍；來源 IP 只取可信 Netlify `context.ip`。 |
+| `supabase/migrations` | 初始表、RLS／寫入限制、管理交易及稽核、指定 ADMIN 網路例外。 |
+| `scripts/migrate_preview_backup.mjs` | 來源紀錄稳定 UUID 搬移；後續資料異動後不得盲目重跑舊備份。 |
 
-登入映射為 `{員工編號小寫}@checkin.kimptondaan.local`，`profiles.id` 等於 Auth user UUID；這是內部登入映射，不是收信用的電子郵件。
+登入映射為 `{員工編號小寫}@checkin.kimptondaan.local`，`profiles.id` 等於 Auth user UUID。這是內部登入映射，不是收信用的電子郵件。
 
-## 權限與雲端儲存設計
+## 五級權限
 
-Admin 可管理員工、部門、角色、帳號狀態、密碼、補登與修改時間、網路設定及所有授權資料下載。HR 可管理員工與部門及非 Admin 角色，不能授予 Admin、重設密碼或修改刷卡時間；系統設定唯讀。IT 在出勤頁提供批次匯入與啟用／停用工具，不提供員工資料、部門或系統管理頁；IT 匯入只能建立一般員工。部門主管只查看與下載自己部門；一般員工只能刷卡及查看／下載自己紀錄。後端和資料庫均驗證角色，不能只依靠隱藏按鈕。
+所有角色都能刷自己的 F1 上班／F2 下班、查看及下載自己的紀錄。同班別再次刷卡會留下另一筆時間，不鎖住。Admin 可管理員工、部門、角色、啟用停用、密碼、補登及異動時間、網路設定與全部授權資料下載。HR 可管理非 Admin 員工與部門，不能重設密碼、授予 Admin 或改刷卡時間；系統設定唯讀。IT 僅在出勤頁有匯入及啟用停用工具，不提供員工、部門與系統設定頁；IT 匯入只能新增一般員工。主管只查看與下載自己的部門；一般員工只看自己。
 
-員工與部門修改採單一儲存動作；成功才結束編輯，失敗保留輸入。部門以 UUID 關聯，代號／名稱變更不改員工 UUID 或原紀錄對應。主管選單使用員工 UUID，可不指定，選取主管不會自行提升該員工角色；沒有對應 UUID 的舊姓名可明確保留。
+部門以 UUID 關聯，修改代號／名称不改員工 UUID 或紀錄關聯。主管可留空、由員工 UUID 下拉選取，不自動提升角色。不能唯一對應的舊主管文字保留原文，不猜測指派。
 
-新帳號依使用者指定採初始密碼 `00000000`，由 Supabase Auth 處理密碼，不是本機登入 fallback。正式使用前應修改管理者密碼並制定首次改密碼政策。稽核不保存密碼內容，前端不再提供含密碼的 JSON 預覽備份。
+## 資料同步與刷卡結果
 
-## 自動更新
+資料存於同一 Supabase，不再把員工、部門與出勤各自存到手機或電腦 localStorage。localStorage 僅可能存 Auth 登入狀態。
 
-新管理版部署後，操作成功立即重新讀取雲端。其他可見視窗每 15 秒自動重新查詢，視窗重新取得焦點也會更新；顯示最後成功同步時間。這不是 Supabase Realtime 推播，也不保證零延遲；頁面背景或裝置斷網時不持續更新。管理動作後強制取得寫入之後的新快照，避免在途舊查詢覆蓋新資料；未儲存的網路草稿不被自動更新清空。
+操作成功後本裝置立即讀取雲端；其他可見頁面約每 15 秒重新查詢，重新取得焦點也更新。背景、斷網、瀏覽器暫停時不承諾 15 秒。這不是零延遲 Realtime。持續顯示最後成功同步時間及刷卡結果；刷卡已寫入但畫面讀取失敗會明示不要重刷。
 
-## TXT 格式
+程式更新與資料同步不同：新版本發布後，舊開啟分頁需要重新整理一次以載入新介面；日後資料新增／修改不需要再向 Manus 下指令。手機與電腦應使用同一正式 Netlify 網址，不使用帶代理的 Manus 預覽網址刷正式出勤，避免代理出口影響來源 IP。
 
-台北時區（`Asia/Taipei`）每筆一行，依時間升序：`YYYYMMDDHHMM員工編號F1/F2`。上班 F1、下班 F2；無標題、逗號、引號或 UTF-8 BOM，以 CRLF 換行。下載區間以全部已授權紀錄篩選，不被畫面預設「今天」或搜尋偷偷限制。一般員工只下載自己，主管僅自己部門。
+## IP 限制
 
-## Netlify 部署
+單一 IPv4 使用 `/32`，例如 `61.216.157.169/32` 只允許該位址；可直接填 IP，伺服器會補 `/32`。允許設定 IP／CIDR／IPv6，但這次 5 個 IPv4 各自設為 `/32`，不放大為整個網段。
 
-GitHub main 為正式自動部署來源，建置 `pnpm run build`，輸出 `dist`，函式目錄 `netlify/functions`。必要環境變數為前端公開的 `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`，及後端的 `SUPABASE_URL`（或前者 URL）、`SUPABASE_SERVICE_ROLE_KEY`。伺服器金鑰絕不可加 `VITE_` 或寫入 Git、TXT、前端 bundle。變數更新後須重新部署。
+只限制一般刷卡動作，不限制登入、查看及下載；Admin 人工新增／異動出勤仍依完整管理權限執行。正式模式來源不符或未知 IP 即拒絕。僅原 ADMIN 的 UUID、仍啟用且具有 admin 角色、例外開關開啟時能略過；其他 Admin、HR、IT、主管及員工不會自動例外。例外不依顯示姓名，原帳號改號也保留同一 UUID 綁定。
 
-目前已授權 Netlify 設定使用 All scopes；不得將 service key 編入前端，每次交付前檢查 bundle。尚未套 003 時，不能把依賴該 SQL 的新後端推送到正式 main。
+`network.check` 只查目前登入者，不接受自報 IP／別人 ID 作判斷，也不寫出勤。與實際刷卡共用資料庫判定。ADMIN 例外不代表免登入或免密碼。
 
-## 必要順序
+## TXT
 
-1. 001、002 已在 Supabase 執行。原備份搬移與 10 個帳號驗證已完成，不需再提供備份或金鑰。
-2. 003 已在 Supabase SQL Editor 執行成功，服務端管理 RPC、網路模式與稽核已核對；不重建或刪除來源員工、部門、刷卡資料。
-3. 核對新增結構與授權成功後，推送管理版至 GitHub main，確認 Netlify production ready。
-4. 使用專用、可清理的測試帳號驗證 CRUD、角色拒絕、補登、重複刷卡、匯入、停用、TXT 與自動更新；不建立真實員工的測試刷卡。
-5. 公司固定 IP 依原需求先不設定。之後 Admin 設定白名單並啟用正式模式，須在公司 Wi-Fi 和行動網路實測；未知來源 IP 在正式模式必須拒絕。
-6. 完成 DNS 與 TLS 後才使用 `https://checkin.kimptondaan.com`；規劃中的域名不代表已啟用。
+固定 `Asia/Taipei`，每筆一行：`YYYYMMDDHHMM員工編號F1/F2`，時間升序，無標題、逗號、引號、UTF-8 BOM，行間 CRLF。下載區間依全部授權紀錄篩選，不受畫面的今天／搜尋篩選偷偷縮小範圍；員工只自己、主管只自己部門。
 
-原備份含舊版密碼，應保持私密且不可提交 Git。保留備份直到核對成功；重複執行搬移前先 dry-run，避免覆蓋之後的人員異動。
+## 安全與維護
+
+新員工初始密碼仍依要求為八個 0，由 Supabase Auth 處理；需要另制定首次更改密碼政策。ADMIN 已改新密碼，請保持私密。稽核不保存密碼內容，來源 JSON 備份不得公開或提交 Git。瀏覽器不能直接修改出勤、角色或呼叫 service-only 管理 RPC。
+
+測試使用獨有標記的專用帳號及紀錄，完成後只清理本次測試資料，不新增真實員工的假出勤。不以既有員工的密码、角色或真实紀錄作重設式測試。

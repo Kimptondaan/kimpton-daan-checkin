@@ -29,12 +29,13 @@ import {
   Wifi,
   X,
 } from 'lucide-react'
-import type { AttendanceRecord, DemoData, Employee, NetworkMode, UserRole } from './lib/types'
+import type { AttendanceRecord, DemoData, Employee, NetworkCheckResult, NetworkMode, UserRole } from './lib/types'
 import { fromTaipeiLocal, toTaipeiLocal, toTxt } from './lib/demoStore'
 import { supabase, supabaseReady } from './lib/supabase'
 import {
   addAttendanceCloud,
   addDepartmentCloud,
+  checkNetworkCloud,
   addEmployeeCloud,
   importEmployeesCloud,
   loadCloudData,
@@ -124,6 +125,7 @@ function App() {
   const [loginBusy, setLoginBusy] = useState(false)
   const [loginError, setLoginError] = useState('')
   const [punchBusy, setPunchBusy] = useState(false)
+  const [punchFeedback, setPunchFeedback] = useState<Toast | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [loginMode, setLoginMode] = useState<UserRole>('employee')
   const [employeeNo, setEmployeeNo] = useState('')
@@ -134,6 +136,7 @@ function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [networkDraft, setNetworkDraft] = useState('')
   const [networkModeDraft, setNetworkModeDraft] = useState<NetworkMode>('test')
+  const [adminIpExemptDraft, setAdminIpExemptDraft] = useState(false)
   const [busyAction, setBusyAction] = useState<BusyAction>(null)
   const busyRef = useRef<BusyAction>(null)
   const refreshPromiseRef = useRef<Promise<DemoData> | null>(null)
@@ -170,6 +173,7 @@ function App() {
     if (syncNetworkDraft) {
       setNetworkDraft(snapshot.network?.allowedIps?.join('\n') ?? '')
       setNetworkModeDraft(snapshot.network?.mode ?? 'test')
+      setAdminIpExemptDraft(snapshot.network?.adminIpExempt ?? false)
     }
     setLastSyncedAt(new Date().toISOString())
     setSession(current => {
@@ -205,8 +209,9 @@ function App() {
     const accessRole = employee.accessRole
     if (!accessRole || !VALID_USER_ROLES.has(accessRole)) throw new Error('雲端員工權限資料不正確，請聯絡管理者。')
     applySnapshot(snapshot, true)
+    setPunchFeedback(null)
     setSession({ role: accessRole, employee })
-    setActiveView('dashboard')
+    setActiveView(['it', 'hr', 'manager'].includes(accessRole) ? 'clock' : 'dashboard')
   }
 
   useEffect(() => {
@@ -293,19 +298,21 @@ function App() {
     setEmployeeNo('')
     setPassword('')
     setLoginError('')
+    setPunchFeedback(null)
     setMobileNavOpen(false)
   }
 
   async function handlePunch(type: 'check_in' | 'check_out') {
     if (!session?.employee || punchBusy) return
-    if (!cloudData) { notify('雲端資料尚未載入，暫時不能刷卡。', 'error'); return }
+    setPunchFeedback(null)
+    if (!cloudData) { setPunchFeedback({ tone: 'error', message: '雲端資料尚未載入，暫時不能刷卡。' }); return }
     setPunchBusy(true)
     try {
-      await punchCloud(type)
-      notify(type === 'check_in' ? '上班刷卡已儲存至雲端，可再次刷卡。' : '下班刷卡已儲存至雲端，可再次刷卡。')
+      await punchCloud(type, session.employee.id)
+      setPunchFeedback({ tone: 'success', message: type === 'check_in' ? '上班刷卡已儲存至雲端。' : '下班刷卡已儲存至雲端。' })
       try { await refreshSnapshot(true) }
-      catch { notify('刷卡已儲存，但畫面更新失敗；請重新整理查看，不需要重刷。', 'info') }
-    } catch (error) { notify(errorText(error, '刷卡未儲存成功。'), 'error') }
+      catch { setPunchFeedback({ tone: 'info', message: '刷卡已儲存至雲端，但畫面更新失敗；請重新整理查看，不需要重刷。' }) }
+    } catch (error) { setPunchFeedback({ tone: 'error', message: errorText(error, '刷卡未儲存成功。') }) }
     finally { setPunchBusy(false) }
   }
 
@@ -316,6 +323,7 @@ function App() {
       if (syncNetworkDraft) {
         setNetworkDraft(snapshot.network.allowedIps.join('\n'))
         setNetworkModeDraft(snapshot.network.mode)
+        setAdminIpExemptDraft(snapshot.network.adminIpExempt ?? false)
       }
     }
     catch { notify(`${successMessage}；雲端重新讀取失敗，寫入已成功，請勿重複建立。`, 'info') }
@@ -332,11 +340,22 @@ function App() {
       return false
     }
     try {
-      await saveNetworkCloud(networkModeDraft, allowedIps)
+      await saveNetworkCloud(networkModeDraft, allowedIps, adminIpExemptDraft)
       await refreshAfterWrite(networkModeDraft === 'test' ? '已儲存網路設定：目前未限制 IP。' : '已儲存公司允許的 IP／CIDR／IPv6 設定。', true)
       return true
     } catch (error) { notify(errorText(error, '網路設定儲存失敗。'), 'error'); return false }
     finally { endBusy(action) }
+  }
+
+  async function checkNetworkAccess(): Promise<NetworkCheckResult | null> {
+    const action = 'network.check'
+    if (!startBusy(action)) return null
+    try {
+      return await checkNetworkCloud()
+    } catch (error) {
+      notify(errorText(error, '目前網路檢查失敗。'), 'error')
+      return null
+    } finally { endBusy(action) }
   }
 
   async function updateEmployee(id: string, patch: EmployeePatch) {
@@ -507,7 +526,7 @@ function App() {
   }
 
   if (session.role === 'employee' && session.employee) {
-    return <EmployeePortal employee={session.employee} data={data} now={now} activeView={activeView} setActiveView={setActiveView} handlePunch={handlePunch} punchBusy={punchBusy} exportAttendance={exportAttendance} logout={logout} toast={toast} />
+    return <EmployeePortal employee={session.employee} data={data} now={now} lastSyncedAt={lastSyncedAt} activeView={activeView} setActiveView={setActiveView} handlePunch={handlePunch} punchBusy={punchBusy} punchFeedback={punchFeedback} exportAttendance={exportAttendance} logout={logout} toast={toast} />
   }
 
   return <AdminShell
@@ -515,6 +534,7 @@ function App() {
     employee={session.employee}
     handlePunch={handlePunch}
     punchBusy={punchBusy}
+    punchFeedback={punchFeedback}
     accessRole={session.role}
     scopeDepartmentCode={session.employee?.departmentCode}
     now={now}
@@ -529,7 +549,10 @@ function App() {
     setNetworkDraft={setNetworkDraft}
     networkModeDraft={networkModeDraft}
     setNetworkModeDraft={setNetworkModeDraft}
+    adminIpExemptDraft={adminIpExemptDraft}
+    setAdminIpExemptDraft={setAdminIpExemptDraft}
     saveNetworkSettings={saveNetworkSettings}
+    checkNetwork={checkNetworkAccess}
     updateEmployee={updateEmployee}
     toggleEmployeeActive={toggleEmployeeActive}
     importEmployees={importEmployees}
@@ -567,22 +590,70 @@ function LoginPage(props: {
   </main>
 }
 
-function EmployeePortal({ employee, data, now, activeView, setActiveView, handlePunch, punchBusy, exportAttendance, logout, toast }: {
-  employee: Employee; data: DemoData; now: Date; activeView: View; setActiveView: (value: View) => void; handlePunch: (type: 'check_in' | 'check_out') => void; punchBusy: boolean; exportAttendance: (records: DemoData['records']) => void; logout: () => void; toast: Toast | null
+function EmployeePortal({ employee, data, now, lastSyncedAt, activeView, setActiveView, handlePunch, punchBusy, punchFeedback, exportAttendance, logout, toast }: {
+  employee: Employee; data: DemoData; now: Date; lastSyncedAt: string | null; activeView: View; setActiveView: (value: View) => void; handlePunch: (type: 'check_in' | 'check_out') => void; punchBusy: boolean; punchFeedback: Toast | null; exportAttendance: (records: DemoData['records']) => void; logout: () => void; toast: Toast | null
 }) {
   const todayRecords = data.records.filter((record) => record.employeeId === employee.id && isSameTaipeiDay(record.punchedAt))
   const didCheckIn = todayRecords.some((record) => record.type === 'check_in')
   const didCheckOut = todayRecords.some((record) => record.type === 'check_out')
   const latestRecords = data.records.filter((record) => record.employeeId === employee.id).slice(0, 6)
   const mobileEmployeeNav = <nav className="mobile-employee-nav" aria-label="員工快速導覽"><button type="button" className={activeView === 'dashboard' ? 'active' : ''} aria-current={activeView === 'dashboard' ? 'page' : undefined} onClick={() => setActiveView('dashboard')}><Clock3 size={17} />今日刷卡</button><button type="button" className={activeView === 'attendance' ? 'active' : ''} aria-current={activeView === 'attendance' ? 'page' : undefined} onClick={() => setActiveView('attendance')}><CalendarDays size={17} />我的紀錄</button></nav>
-  return <div className="employee-app"><header className="mobile-topbar"><div className="brand-inline"><div className="brand-mark small">K</div><span>大安金普頓</span></div><button className="icon-button" onClick={logout} aria-label="登出"><LogOut size={18} /></button></header>{mobileEmployeeNav}<div className="employee-shell"><aside className="employee-rail"><div className="rail-brand"><div className="brand-mark">K</div><p>DAAN<br />KIMPTON</p></div><div className="rail-person"><div className="avatar">{employee.name.slice(0, 1)}</div><div><strong>{employee.name}</strong><small>{employee.employeeNo} · {employee.department}</small></div></div><nav className="rail-nav"><button className={activeView === 'dashboard' ? 'active' : ''} onClick={() => setActiveView('dashboard')}><Clock3 size={18} />今日刷卡</button><button className={activeView === 'attendance' ? 'active' : ''} onClick={() => setActiveView('attendance')}><CalendarDays size={18} />我的紀錄</button></nav><button className="rail-logout" onClick={logout}><LogOut size={17} />登出</button></aside><main className="employee-main"><div className="page-heading"><div><p className="eyebrow">EMPLOYEE PORTAL</p><h1>{activeView === 'dashboard' ? '今天，從容開始。' : '我的刷卡紀錄'}</h1><p className="muted">{formatTaipeiDate(now.toISOString())} · {formatTaipeiTime(now.toISOString())}</p></div></div>{activeView === 'dashboard' ? <EmployeeDashboard employee={employee} data={data} now={now} didCheckIn={didCheckIn} didCheckOut={didCheckOut} handlePunch={handlePunch} punchBusy={punchBusy} /> : <PersonalRecords records={latestRecords} allRecords={data.records.filter((record) => record.employeeId === employee.id)} exportAttendance={exportAttendance} />}</main></div>{toast && <ToastMessage toast={toast} />}</div>
+  return <div className="employee-app"><header className="mobile-topbar"><div className="brand-inline"><div className="brand-mark small">K</div><span>大安金普頓</span></div><button className="icon-button" onClick={logout} aria-label="登出"><LogOut size={18} /></button></header>{mobileEmployeeNav}<div className="employee-shell"><aside className="employee-rail"><div className="rail-brand"><div className="brand-mark">K</div><p>DAAN<br />KIMPTON</p></div><div className="rail-person"><div className="avatar">{employee.name.slice(0, 1)}</div><div><strong>{employee.name}</strong><small>{employee.employeeNo} · {employee.department}</small></div></div><nav className="rail-nav"><button className={activeView === 'dashboard' ? 'active' : ''} onClick={() => setActiveView('dashboard')}><Clock3 size={18} />今日刷卡</button><button className={activeView === 'attendance' ? 'active' : ''} onClick={() => setActiveView('attendance')}><CalendarDays size={18} />我的紀錄</button></nav><button className="rail-logout" onClick={logout}><LogOut size={17} />登出</button></aside><main className="employee-main"><div className="page-heading"><div><p className="eyebrow">EMPLOYEE PORTAL</p><h1>{activeView === 'dashboard' ? '今天，從容開始。' : '我的刷卡紀錄'}</h1><p className="muted">{formatTaipeiDate(now.toISOString())} · {formatTaipeiTime(now.toISOString())}</p></div></div>{activeView === 'dashboard' ? <EmployeeDashboard employee={employee} data={data} now={now} lastSyncedAt={lastSyncedAt} didCheckIn={didCheckIn} didCheckOut={didCheckOut} handlePunch={handlePunch} punchBusy={punchBusy} punchFeedback={punchFeedback} /> : <PersonalRecords records={latestRecords} allRecords={data.records.filter((record) => record.employeeId === employee.id)} exportAttendance={exportAttendance} />}</main></div>{toast && <ToastMessage toast={toast} />}</div>
 }
 
-function EmployeeDashboard({ employee, data, now, didCheckIn, didCheckOut, handlePunch, punchBusy }: { employee: Employee; data: DemoData; now: Date; didCheckIn: boolean; didCheckOut: boolean; handlePunch: (type: 'check_in' | 'check_out') => void; punchBusy: boolean }) {
+function EmployeeDashboard({ employee, data, now, lastSyncedAt, didCheckIn, didCheckOut, handlePunch, punchBusy, punchFeedback }: { employee: Employee; data: DemoData; now: Date; lastSyncedAt: string | null; didCheckIn: boolean; didCheckOut: boolean; handlePunch: (type: 'check_in' | 'check_out') => void; punchBusy: boolean; punchFeedback: Toast | null }) {
   const todayRecords = data.records.filter((record) => record.employeeId === employee.id && isSameTaipeiDay(record.punchedAt))
   const checkIn = todayRecords.find((record) => record.type === 'check_in')
   const checkOut = todayRecords.find((record) => record.type === 'check_out')
-  return <><section className="employee-hero"><div><span className="hero-kicker">{now.getHours() < 12 ? 'GOOD MORNING' : 'GOOD AFTERNOON'}</span><h2>{employee.name}，今天辛苦了。</h2><p>請在開始與結束班次時完成刷卡，系統會自動留下時間紀錄。</p></div><div className="hero-date"><span>{new Intl.DateTimeFormat('zh-TW', { timeZone: TAIPEI_TIME_ZONE, month: 'long', day: 'numeric' }).format(now)}</span><strong>{new Intl.DateTimeFormat('zh-TW', { timeZone: TAIPEI_TIME_ZONE, weekday: 'long' }).format(now)}</strong></div></section><section className="punch-grid"><button className={`punch-card check-in ${didCheckIn ? 'done' : ''}`} disabled={punchBusy} aria-busy={punchBusy} onClick={() => handlePunch('check_in')}><div className="punch-card-top"><span className="punch-index">01</span><span className="punch-state">{didCheckIn ? '已完成' : '尚未刷卡'}</span></div><div className="punch-icon"><ArrowDownToLine size={25} /></div><h3>上班刷卡</h3><p>{checkIn ? `最近一次 ${formatTaipeiDateTime(checkIn.punchedAt)}` : '記錄你的到班時間'}</p><span className="punch-action">再次刷卡 <ChevronRight size={17} /></span></button><button className={`punch-card check-out ${didCheckOut ? 'done' : ''}`} disabled={punchBusy} aria-busy={punchBusy} onClick={() => handlePunch('check_out')}><div className="punch-card-top"><span className="punch-index">02</span><span className="punch-state">{didCheckOut ? '已完成' : '尚未刷卡'}</span></div><div className="punch-icon"><ArrowLeft size={25} /></div><h3>下班刷卡</h3><p>{checkOut ? `最近一次 ${formatTaipeiDateTime(checkOut.punchedAt)}` : '結束班次時記得刷卡'}</p><span className="punch-action">再次刷卡 <ChevronRight size={17} /></span></button></section><section className="employee-status-row"><div className="section-label">TODAY AT A GLANCE</div><div className="status-list"><div><span className={didCheckIn ? 'mini-status done' : 'mini-status'}>{didCheckIn ? <Check size={14} /> : '—'}</span><span>上班時間</span><strong>{checkIn ? formatTaipeiDateTime(checkIn.punchedAt).slice(-5) : '待刷卡'}</strong></div><div><span className={didCheckOut ? 'mini-status done' : 'mini-status'}>{didCheckOut ? <Check size={14} /> : '—'}</span><span>下班時間</span><strong>{checkOut ? formatTaipeiDateTime(checkOut.punchedAt).slice(-5) : '待刷卡'}</strong></div></div></section></>
+  return <><section className="employee-hero"><div><span className="hero-kicker">{now.getHours() < 12 ? 'GOOD MORNING' : 'GOOD AFTERNOON'}</span><h2>{employee.name}，今天辛苦了。</h2><p>請在開始與結束班次時完成刷卡，系統會自動留下時間紀錄。</p></div><div className="hero-date"><span>{new Intl.DateTimeFormat('zh-TW', { timeZone: TAIPEI_TIME_ZONE, month: 'long', day: 'numeric' }).format(now)}</span><strong>{new Intl.DateTimeFormat('zh-TW', { timeZone: TAIPEI_TIME_ZONE, weekday: 'long' }).format(now)}</strong></div></section><PunchFeedbackMessage feedback={punchFeedback} /><section className="punch-grid"><button className={`punch-card check-in ${didCheckIn ? 'done' : ''}`} disabled={punchBusy} aria-busy={punchBusy} onClick={() => handlePunch('check_in')}><div className="punch-card-top"><span className="punch-index">01</span><span className="punch-state">{didCheckIn ? '已完成' : '尚未刷卡'}</span></div><div className="punch-icon"><ArrowDownToLine size={25} /></div><h3>上班刷卡</h3><p>{checkIn ? `最近一次 ${formatTaipeiDateTime(checkIn.punchedAt)}` : '記錄你的到班時間'}</p><span className="punch-action">再次刷卡 <ChevronRight size={17} /></span></button><button className={`punch-card check-out ${didCheckOut ? 'done' : ''}`} disabled={punchBusy} aria-busy={punchBusy} onClick={() => handlePunch('check_out')}><div className="punch-card-top"><span className="punch-index">02</span><span className="punch-state">{didCheckOut ? '已完成' : '尚未刷卡'}</span></div><div className="punch-icon"><ArrowLeft size={25} /></div><h3>下班刷卡</h3><p>{checkOut ? `最近一次 ${formatTaipeiDateTime(checkOut.punchedAt)}` : '結束班次時記得刷卡'}</p><span className="punch-action">再次刷卡 <ChevronRight size={17} /></span></button></section><PunchNetworkStatus employee={employee} networkMode={data.network.mode} /><section className="employee-status-row"><div className="section-label">TODAY AT A GLANCE</div><div className="status-list"><div><span className={didCheckIn ? 'mini-status done' : 'mini-status'}>{didCheckIn ? <Check size={14} /> : '—'}</span><span>上班時間</span><strong>{checkIn ? formatTaipeiDateTime(checkIn.punchedAt).slice(-5) : '待刷卡'}</strong></div><div><span className={didCheckOut ? 'mini-status done' : 'mini-status'}>{didCheckOut ? <Check size={14} /> : '—'}</span><span>下班時間</span><strong>{checkOut ? formatTaipeiDateTime(checkOut.punchedAt).slice(-5) : '待刷卡'}</strong></div></div></section><p className="cloud-sync-note">雲端資料最後更新 {lastSyncedAt ? formatTaipeiTime(lastSyncedAt) : '尚未成功更新'}；可見頁面約15秒自動更新</p><p className="cloud-snapshot-note">若目前網路中斷，仍顯示上次成功讀取的快照；刷卡授權仍由伺服器判定。</p></>
+}
+
+function PunchFeedbackMessage({ feedback }: { feedback: Toast | null }) {
+  if (!feedback) return null
+  const isError = feedback.tone === 'error'
+  return <div className={`punch-feedback ${feedback.tone}`} role={isError ? 'alert' : 'status'} aria-live={isError ? 'assertive' : 'polite'} aria-atomic="true"><span className="punch-feedback-icon">{feedback.tone === 'success' ? <Check size={15} /> : feedback.tone === 'error' ? <X size={15} /> : <CircleAlert size={15} />}</span><span>{feedback.message}</span></div>
+}
+
+function PunchNetworkStatus({ employee, networkMode }: { employee: Employee; networkMode: NetworkMode }) {
+  const [networkCheck, setNetworkCheck] = useState<NetworkCheckResult | null>(null)
+  const [readingBusy, setReadingBusy] = useState(false)
+  const [readError, setReadError] = useState('')
+  const requestRef = useRef(0)
+
+  useEffect(() => {
+    let alive = true
+    const requestId = ++requestRef.current
+    setReadingBusy(true)
+    setNetworkCheck(null)
+    setReadError('')
+    void checkNetworkCloud(employee.id).then((result) => {
+      if (!alive || requestId !== requestRef.current) return
+      setNetworkCheck(result)
+    }).catch((error) => {
+      if (!alive || requestId !== requestRef.current) return
+      setReadError(errorText(error, '目前網路檢查失敗。'))
+    }).finally(() => {
+      if (alive && requestId === requestRef.current) setReadingBusy(false)
+    })
+    return () => { alive = false }
+  }, [employee.id, networkMode])
+
+  function inspectNetwork() {
+    const requestId = ++requestRef.current
+    setReadingBusy(true)
+    setNetworkCheck(null)
+    setReadError('')
+    void checkNetworkCloud(employee.id).then((result) => {
+      if (requestId === requestRef.current) setNetworkCheck(result)
+    }).catch((error) => {
+      if (requestId === requestRef.current) setReadError(errorText(error, '目前網路檢查失敗。'))
+    }).finally(() => {
+      if (requestId === requestRef.current) setReadingBusy(false)
+    })
+  }
+
+  const result = networkCheck
+  return <section className="punch-network-status" aria-labelledby="punch-network-title" aria-live="polite"><div className="punch-network-heading"><div><strong id="punch-network-title"><Network size={16} />刷卡網路狀態</strong><span>僅查詢目前登入帳號；觀察 IP 與刷卡授權仍以伺服器回覆為準。</span></div><button type="button" className="secondary-button" onClick={inspectNetwork} disabled={readingBusy}><Network size={15} />{readingBusy ? '檢查中…' : '重新檢查網路'}</button></div>{readingBusy ? <p className="punch-network-message">正在向伺服器檢查目前網路，尚未確認允許刷卡。</p> : readError ? <p className="punch-network-message error">刷卡網路狀態檢查失敗：{readError} 尚未確認允許，請重新檢查網路。</p> : result ? <div className={`punch-network-result ${result.canPunch ? 'allowed' : 'denied'}`}><div><span>觀察到的公網 IP</span><strong>{result.observedIp ?? '無法取得'}</strong></div><div><span>公司 IP 限制</span><strong>{result.mode === 'strict' ? '已啟用' : '未限制 IP'}</strong></div><div><span>目前刷卡</span><strong>{result.canPunch ? '允許刷卡' : '拒絕刷卡'}</strong></div><div><span>ADMIN 例外</span><strong>{result.adminExempt ? '是，本帳號適用' : '否，本帳號不適用'}</strong></div></div> : <p className="punch-network-message">尚未取得伺服器判定，不會假稱允許刷卡。</p>}</section>
 }
 
 function PersonalRecords({ records, allRecords, exportAttendance }: { records: DemoData['records']; allRecords: DemoData['records']; exportAttendance: (records: DemoData['records']) => void }) {
@@ -602,11 +673,11 @@ function PersonalRecords({ records, allRecords, exportAttendance }: { records: D
 }
 
 function AdminShell(props: {
-  data: DemoData; accessRole: UserRole; scopeDepartmentCode?: string; now: Date; lastSyncedAt: string | null; activeView: View; setActiveView: (value: View) => void; mobileNavOpen: boolean; setMobileNavOpen: (value: boolean) => void; logout: () => void; exportAttendance: (records: DemoData['records']) => void; networkDraft: string; setNetworkDraft: (value: string) => void; networkModeDraft: NetworkMode; setNetworkModeDraft: (value: NetworkMode) => void; saveNetworkSettings: () => Promise<boolean>; updateEmployee: (id: string, patch: EmployeePatch) => Promise<boolean>; toggleEmployeeActive: (id: string) => Promise<boolean>; importEmployees: (rows: string[][]) => Promise<boolean>; addAttendanceRecord: (input: { employeeId: string; type: AttendanceRecord['type']; punchedAt: string }) => Promise<boolean>; updateAttendanceRecord: (id: string, patch: { type: AttendanceRecord['type']; punchedAt: string }) => Promise<boolean>; addEmployee: (input: NewEmployee) => Promise<boolean>; addDepartment: (input: DepartmentDraft) => Promise<boolean>; updateDepartment: (id: string, patch: DepartmentPatch) => Promise<boolean>; updatePassword: (accountId: string, password: string) => Promise<boolean>; busyAction: BusyAction; toast: Toast | null
-  employee?: Employee; handlePunch: (type: 'check_in' | 'check_out') => void; punchBusy: boolean
+  data: DemoData; accessRole: UserRole; scopeDepartmentCode?: string; now: Date; lastSyncedAt: string | null; activeView: View; setActiveView: (value: View) => void; mobileNavOpen: boolean; setMobileNavOpen: (value: boolean) => void; logout: () => void; exportAttendance: (records: DemoData['records']) => void; networkDraft: string; setNetworkDraft: (value: string) => void; networkModeDraft: NetworkMode; setNetworkModeDraft: (value: NetworkMode) => void; adminIpExemptDraft: boolean; setAdminIpExemptDraft: (value: boolean) => void; saveNetworkSettings: () => Promise<boolean>; checkNetwork: () => Promise<NetworkCheckResult | null>; updateEmployee: (id: string, patch: EmployeePatch) => Promise<boolean>; toggleEmployeeActive: (id: string) => Promise<boolean>; importEmployees: (rows: string[][]) => Promise<boolean>; addAttendanceRecord: (input: { employeeId: string; type: AttendanceRecord['type']; punchedAt: string }) => Promise<boolean>; updateAttendanceRecord: (id: string, patch: { type: AttendanceRecord['type']; punchedAt: string }) => Promise<boolean>; addEmployee: (input: NewEmployee) => Promise<boolean>; addDepartment: (input: DepartmentDraft) => Promise<boolean>; updateDepartment: (id: string, patch: DepartmentPatch) => Promise<boolean>; updatePassword: (accountId: string, password: string) => Promise<boolean>; busyAction: BusyAction; toast: Toast | null
+  employee?: Employee; handlePunch: (type: 'check_in' | 'check_out') => void; punchBusy: boolean; punchFeedback: Toast | null
 }) {
-  const { data, accessRole, scopeDepartmentCode, now, lastSyncedAt, activeView, setActiveView, mobileNavOpen, setMobileNavOpen, logout, exportAttendance, networkDraft, setNetworkDraft, networkModeDraft, setNetworkModeDraft, saveNetworkSettings, updateEmployee, toggleEmployeeActive, importEmployees, addAttendanceRecord, updateAttendanceRecord, addEmployee, addDepartment, updateDepartment, updatePassword, busyAction, toast } = props
-  const { employee, handlePunch, punchBusy } = props
+  const { data, accessRole, scopeDepartmentCode, now, lastSyncedAt, activeView, setActiveView, mobileNavOpen, setMobileNavOpen, logout, exportAttendance, networkDraft, setNetworkDraft, networkModeDraft, setNetworkModeDraft, adminIpExemptDraft, setAdminIpExemptDraft, saveNetworkSettings, checkNetwork, updateEmployee, toggleEmployeeActive, importEmployees, addAttendanceRecord, updateAttendanceRecord, addEmployee, addDepartment, updateDepartment, updatePassword, busyAction, toast } = props
+  const { employee, handlePunch, punchBusy, punchFeedback } = props
   const [query, setQuery] = useState('')
   const [dateFilter, setDateFilter] = useState<'today' | 'all'>('today')
   const scopedEmployees = data.employees.filter((employee) => accessRole !== 'manager' || employee.departmentCode === scopeDepartmentCode)
@@ -627,13 +698,13 @@ function AdminShell(props: {
   const navItems = ([{ id: 'dashboard', label: '總覽', icon: SlidersHorizontal }, { id: 'attendance', label: accessRole === 'manager' ? '部門出勤' : '出勤紀錄', icon: CalendarDays }, { id: 'employees', label: '員工資料', icon: UsersRound }, { id: 'departments', label: '部門設定', icon: Building2 }, { id: 'settings', label: '系統設定', icon: Settings }] as { id: View; label: string; icon: typeof Clock3 }[]).filter((item) => accessRole === 'admin' || accessRole === 'hr' ? true : item.id === 'dashboard' || item.id === 'attendance')
   navItems.push({ id: 'clock', label: '我的刷卡', icon: Clock3 }, { id: 'personal', label: '我的紀錄', icon: CalendarDays })
   const viewTitle = navItems.find((item) => item.id === activeView)?.label ?? '總覽'
-  return <div className="admin-app"><header className="admin-mobile-topbar"><button type="button" className="icon-button admin-menu-toggle" onClick={() => setMobileNavOpen(!mobileNavOpen)} aria-label="管理選單" aria-expanded={mobileNavOpen} aria-controls="admin-sidebar"><Menu size={20} /><span>管理選單</span></button><div className="brand-inline"><div className="brand-mark small">K</div><span>管理者後台</span></div><button className="icon-button" onClick={logout} aria-label="登出"><LogOut size={18} /></button></header><aside id="admin-sidebar" className={`admin-sidebar ${mobileNavOpen ? 'open' : ''}`}><div className="sidebar-brand"><div className="brand-mark">K</div><div><p>DAAN KIMPTON</p><strong>員工刷卡系統</strong></div></div><div className="sidebar-meta"><span className="eyebrow">ADMIN CONSOLE</span></div><nav className="sidebar-nav">{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={activeView === id ? 'active' : ''} onClick={() => { setActiveView(id); setMobileNavOpen(false) }}><Icon size={18} /><span>{label}</span>{activeView === id && <ChevronRight size={15} className="nav-arrow" />}</button>)}</nav><div className="sidebar-bottom"><div className="admin-profile"><div className="avatar admin-avatar">A</div><div><strong>管理者</strong><small>{accessRole === 'it' ? 'IT 管理員' : accessRole === 'hr' ? '人資主管' : accessRole === 'manager' ? '部門主管' : '系統管理員'}</small></div></div><button className="sidebar-logout" onClick={logout}><LogOut size={17} />登出</button></div></aside><main className="admin-main"><div className="admin-heading"><div><p className="eyebrow">{activeView === 'dashboard' ? 'AT A GLANCE' : 'ADMIN CONSOLE'}</p><h1>{viewTitle}</h1><p className="muted">{formatTaipeiDate(now.toISOString())} · 最後成功更新 {lastSyncedAt ? formatTaipeiDateTime(lastSyncedAt) : '尚未成功更新'}</p></div><div className="heading-actions"><div className="network-summary"><span className="status-dot" />{data.network.mode === 'test' ? '未限制 IP' : 'IP 限制已啟用'}</div></div></div>{activeView === 'dashboard' && <AdminDashboard data={data} todayRecords={todayRecords} activeEmployees={activeEmployees} checkedEmployeeIds={checkedEmployeeIds} onNavigate={setActiveView} accessRole={accessRole} />}{activeView === 'clock' && employee && <EmployeeDashboard employee={employee} data={data} now={now} didCheckIn={personalDidCheckIn} didCheckOut={personalDidCheckOut} handlePunch={handlePunch} punchBusy={punchBusy} />}{activeView === 'personal' && employee && <PersonalRecords records={personalRecords.slice(0, 6)} allRecords={personalRecords} exportAttendance={exportAttendance} />}{activeView === 'attendance' && <AttendanceAdmin data={data} records={visibleRecords} allScopedRecords={scopedRecords} query={query} setQuery={setQuery} dateFilter={dateFilter} setDateFilter={setDateFilter} addAttendanceRecord={addAttendanceRecord} updateAttendanceRecord={updateAttendanceRecord} canEditAttendance={accessRole === 'admin'} accessRole={accessRole} scopeDepartmentCode={scopeDepartmentCode} exportAttendance={exportAttendance} toggleEmployeeActive={toggleEmployeeActive} importEmployees={importEmployees} busyAction={busyAction} />}{activeView === 'employees' && (accessRole === 'admin' || accessRole === 'hr') && <EmployeeAdmin data={data} accessRole={accessRole} updateEmployee={updateEmployee} toggleEmployeeActive={toggleEmployeeActive} importEmployees={importEmployees} addEmployee={addEmployee} updatePassword={updatePassword} busyAction={busyAction} />}{activeView === 'departments' && (accessRole === 'admin' || accessRole === 'hr') && <DepartmentAdmin data={data} addDepartment={addDepartment} updateDepartment={updateDepartment} busyAction={busyAction} />}{activeView === 'settings' && (accessRole === 'admin' || accessRole === 'hr') && <SettingsAdmin readOnly={accessRole === 'hr'} data={data} networkDraft={networkDraft} setNetworkDraft={setNetworkDraft} networkModeDraft={networkModeDraft} setNetworkModeDraft={setNetworkModeDraft} saveNetworkSettings={saveNetworkSettings} updatePassword={updatePassword} busyAction={busyAction} />}</main>{toast && <ToastMessage toast={toast} />}</div>
+  return <div className="admin-app"><header className="admin-mobile-topbar"><button type="button" className="icon-button admin-menu-toggle" onClick={() => setMobileNavOpen(!mobileNavOpen)} aria-label="管理選單" aria-expanded={mobileNavOpen} aria-controls="admin-sidebar"><Menu size={20} /><span>管理選單</span></button><div className="brand-inline"><div className="brand-mark small">K</div><span>管理者後台</span></div><button className="icon-button" onClick={logout} aria-label="登出"><LogOut size={18} /></button></header><aside id="admin-sidebar" className={`admin-sidebar ${mobileNavOpen ? 'open' : ''}`}><div className="sidebar-brand"><div className="brand-mark">K</div><div><p>DAAN KIMPTON</p><strong>員工刷卡系統</strong></div></div><div className="sidebar-meta"><span className="eyebrow">ADMIN CONSOLE</span></div><nav className="sidebar-nav">{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={activeView === id ? 'active' : ''} onClick={() => { setActiveView(id); setMobileNavOpen(false) }}><Icon size={18} /><span>{label}</span>{activeView === id && <ChevronRight size={15} className="nav-arrow" />}</button>)}</nav><div className="sidebar-bottom"><div className="admin-profile"><div className="avatar admin-avatar">A</div><div><strong>管理者</strong><small>{accessRole === 'it' ? 'IT 管理員' : accessRole === 'hr' ? '人資主管' : accessRole === 'manager' ? '部門主管' : '系統管理員'}</small></div></div><button className="sidebar-logout" onClick={logout}><LogOut size={17} />登出</button></div></aside><main className="admin-main"><div className="admin-heading"><div><p className="eyebrow">{activeView === 'dashboard' ? 'AT A GLANCE' : 'ADMIN CONSOLE'}</p><h1>{viewTitle}</h1><p className="muted">{formatTaipeiDate(now.toISOString())} · 最後成功更新 {lastSyncedAt ? formatTaipeiDateTime(lastSyncedAt) : '尚未成功更新'}</p></div><div className="heading-actions"><div className="network-summary"><span className="status-dot" />{data.network.mode === 'test' ? '未限制 IP' : 'IP 限制已啟用'}</div></div></div><nav className="personal-quick-nav" aria-label="個人快捷功能"><button type="button" className={activeView === 'clock' ? 'active' : ''} aria-current={activeView === 'clock' ? 'page' : undefined} onClick={() => setActiveView('clock')}><Clock3 size={16} />我的刷卡</button><button type="button" className={activeView === 'personal' ? 'active' : ''} aria-current={activeView === 'personal' ? 'page' : undefined} onClick={() => setActiveView('personal')}><CalendarDays size={16} />我的紀錄</button></nav>{activeView === 'dashboard' && <AdminDashboard data={data} todayRecords={todayRecords} activeEmployees={activeEmployees} checkedEmployeeIds={checkedEmployeeIds} onNavigate={setActiveView} accessRole={accessRole} />}{activeView === 'clock' && employee && <EmployeeDashboard employee={employee} data={data} now={now} lastSyncedAt={lastSyncedAt} didCheckIn={personalDidCheckIn} didCheckOut={personalDidCheckOut} handlePunch={handlePunch} punchBusy={punchBusy} punchFeedback={punchFeedback} />}{activeView === 'personal' && employee && <PersonalRecords records={personalRecords.slice(0, 6)} allRecords={personalRecords} exportAttendance={exportAttendance} />}{activeView === 'attendance' && <AttendanceAdmin data={data} records={visibleRecords} allScopedRecords={scopedRecords} query={query} setQuery={setQuery} dateFilter={dateFilter} setDateFilter={setDateFilter} addAttendanceRecord={addAttendanceRecord} updateAttendanceRecord={updateAttendanceRecord} canEditAttendance={accessRole === 'admin'} accessRole={accessRole} scopeDepartmentCode={scopeDepartmentCode} exportAttendance={exportAttendance} toggleEmployeeActive={toggleEmployeeActive} importEmployees={importEmployees} busyAction={busyAction} />}{activeView === 'employees' && (accessRole === 'admin' || accessRole === 'hr') && <EmployeeAdmin data={data} accessRole={accessRole} updateEmployee={updateEmployee} toggleEmployeeActive={toggleEmployeeActive} importEmployees={importEmployees} addEmployee={addEmployee} updatePassword={updatePassword} busyAction={busyAction} />}{activeView === 'departments' && (accessRole === 'admin' || accessRole === 'hr') && <DepartmentAdmin data={data} addDepartment={addDepartment} updateDepartment={updateDepartment} busyAction={busyAction} />}{activeView === 'settings' && (accessRole === 'admin' || accessRole === 'hr') && <SettingsAdmin readOnly={accessRole === 'hr'} data={data} networkDraft={networkDraft} setNetworkDraft={setNetworkDraft} networkModeDraft={networkModeDraft} setNetworkModeDraft={setNetworkModeDraft} adminIpExemptDraft={adminIpExemptDraft} setAdminIpExemptDraft={setAdminIpExemptDraft} saveNetworkSettings={saveNetworkSettings} checkNetwork={checkNetwork} updatePassword={updatePassword} busyAction={busyAction} />}</main>{toast && <ToastMessage toast={toast} />}</div>
 }
 
 function AdminDashboard({ data, todayRecords, activeEmployees, checkedEmployeeIds, onNavigate, accessRole }: { data: DemoData; todayRecords: DemoData['records']; activeEmployees: Employee[]; checkedEmployeeIds: Set<string>; onNavigate: (view: View) => void; accessRole: UserRole }) {
   const checkIns = todayRecords.filter((record) => record.type === 'check_in').length
   const checkOuts = todayRecords.filter((record) => record.type === 'check_out').length
-  return <><section className="admin-welcome"><div><span className="hero-kicker">TODAY · {new Intl.DateTimeFormat('zh-TW', { timeZone: TAIPEI_TIME_ZONE, month: '2-digit', day: '2-digit' }).format(new Date())}</span><h2>早安，管理者。</h2><p>這裡是團隊今天的出勤狀態。保持簡單，讓每個人準時開始。</p></div><div className="welcome-symbol"><Globe2 size={34} /></div></section><section className="metric-grid"><MetricCard label="在職員工" value={activeEmployees.length} detail="目前啟用帳號" icon={<UsersRound size={19} />} /><MetricCard label="今日已刷卡" value={checkedEmployeeIds.size} detail={`上班 ${checkIns} · 下班 ${checkOuts}`} icon={<Clock3 size={19} />} /><MetricCard label="待處理異常" value={data.records.filter((record) => record.status === 'rejected').length} detail="需要管理者確認" icon={<CircleAlert size={19} />} warning /><MetricCard label="網路模式" value={data.network.mode === 'test' ? '未限制 IP' : '正式' } detail={data.network.allowedIps.length ? `${data.network.allowedIps.length} 組允許 IP／網段` : '目前未設定限制'} icon={<Network size={19} />} /></section><div className="admin-columns"><section className="content-card dashboard-list-card"><div className="card-heading"><div><p className="eyebrow">TODAY'S TEAM</p><h2>團隊出勤</h2></div><button className="text-button" onClick={() => onNavigate('attendance')}>查看全部 <ChevronRight size={15} /></button></div><div className="team-list">{activeEmployees.slice(0, 5).map((employee) => { const employeeRecords = todayRecords.filter((record) => record.employeeId === employee.id); const checkedIn = employeeRecords.some((record) => record.type === 'check_in'); const checkedOut = employeeRecords.some((record) => record.type === 'check_out'); return <div className="team-row" key={employee.id}><div className="avatar">{employee.name.slice(0, 1)}</div><div className="team-person"><strong>{employee.name}</strong><small>{employee.department} · {employee.title}</small></div><div className="team-status"><span className={checkedIn ? 'tag success' : 'tag'}>{checkedIn ? '已上班' : '未刷卡'}</span><span className={checkedOut ? 'tag success pale' : 'tag muted-tag'}>{checkedOut ? '已下班' : '—'}</span></div></div> })}</div></section><section className="content-card quick-card"><div className="card-heading"><div><p className="eyebrow">QUICK ACTIONS</p><h2>常用操作</h2></div><SlidersHorizontal size={21} /></div>{(accessRole === 'admin' || accessRole === 'hr') && <button onClick={() => onNavigate('employees')}><span className="quick-icon"><UsersRound size={18} /></span><span><strong>管理員工資料</strong><small>新增、編輯或停用帳號</small></span><ChevronRight size={16} /></button>}{accessRole === 'admin' && <button onClick={() => onNavigate('settings')}><span className="quick-icon"><Wifi size={18} /></span><span><strong>設定公司 IP</strong><small>{data.network.mode === 'test' ? '目前未限制 IP' : '目前已啟用正式模式'}</small></span><ChevronRight size={16} /></button>}</section></div></>
+  return <><section className="admin-welcome"><div><span className="hero-kicker">TODAY · {new Intl.DateTimeFormat('zh-TW', { timeZone: TAIPEI_TIME_ZONE, month: '2-digit', day: '2-digit' }).format(new Date())}</span><h2>早安，管理者。</h2><p>這裡是團隊今天的出勤狀態。保持簡單，讓每個人準時開始。</p></div><div className="welcome-symbol"><Globe2 size={34} /></div></section><section className="metric-grid"><MetricCard label="在職員工" value={activeEmployees.length} detail="目前啟用帳號" icon={<UsersRound size={19} />} /><MetricCard label="今日已刷卡" value={checkedEmployeeIds.size} detail={`上班 ${checkIns} · 下班 ${checkOuts}`} icon={<Clock3 size={19} />} /><MetricCard label="待處理異常" value={data.records.filter((record) => record.status === 'rejected').length} detail="需要管理者確認" icon={<CircleAlert size={19} />} warning /><MetricCard label="網路模式" value={data.network.mode === 'test' ? '未限制 IP' : '正式模式'} detail={data.network.mode === 'test' ? '刷卡不限制來源 IP' : '刷卡僅允許伺服器設定的 IP／網段'} icon={<Network size={19} />} /></section><div className="admin-columns"><section className="content-card dashboard-list-card"><div className="card-heading"><div><p className="eyebrow">TODAY'S TEAM</p><h2>團隊出勤</h2></div><button className="text-button" onClick={() => onNavigate('attendance')}>查看全部 <ChevronRight size={15} /></button></div><div className="team-list">{activeEmployees.slice(0, 5).map((employee) => { const employeeRecords = todayRecords.filter((record) => record.employeeId === employee.id); const checkedIn = employeeRecords.some((record) => record.type === 'check_in'); const checkedOut = employeeRecords.some((record) => record.type === 'check_out'); return <div className="team-row" key={employee.id}><div className="avatar">{employee.name.slice(0, 1)}</div><div className="team-person"><strong>{employee.name}</strong><small>{employee.department} · {employee.title}</small></div><div className="team-status"><span className={checkedIn ? 'tag success' : 'tag'}>{checkedIn ? '已上班' : '未刷卡'}</span><span className={checkedOut ? 'tag success pale' : 'tag muted-tag'}>{checkedOut ? '已下班' : '—'}</span></div></div> })}</div></section><section className="content-card quick-card"><div className="card-heading"><div><p className="eyebrow">QUICK ACTIONS</p><h2>常用操作</h2></div><SlidersHorizontal size={21} /></div>{(accessRole === 'admin' || accessRole === 'hr') && <button onClick={() => onNavigate('employees')}><span className="quick-icon"><UsersRound size={18} /></span><span><strong>管理員工資料</strong><small>新增、編輯或停用帳號</small></span><ChevronRight size={16} /></button>}{accessRole === 'admin' && <button onClick={() => onNavigate('settings')}><span className="quick-icon"><Wifi size={18} /></span><span><strong>設定公司 IP</strong><small>{data.network.mode === 'test' ? '目前未限制 IP' : '目前已啟用正式模式'}</small></span><ChevronRight size={16} /></button>}</section></div></>
 }
 
 function MetricCard({ label, value, detail, icon, warning = false }: { label: string; value: string | number; detail: string; icon: ReactNode; warning?: boolean }) { return <div className={`metric-card ${warning ? 'warning' : ''}`}><div className="metric-top"><span>{label}</span><span className="metric-icon">{icon}</span></div><strong>{value}</strong><small>{detail}</small></div> }
@@ -703,11 +774,26 @@ function DepartmentAdmin({ data, addDepartment, updateDepartment, busyAction }: 
   return <section className="content-card employee-admin-card"><div className="card-heading"><div><p className="eyebrow">DEPARTMENT DIRECTORY</p><h2>部門設定</h2><p className="muted">部門主管可留白；下拉值使用員工 UUID，同名員工不會混淆。舊自由文字主管可選擇保留。</p></div><button className="primary-button" onClick={() => setIsAdding((value) => !value)} disabled={busyAction !== null}>{isAdding ? <X size={16} /> : <Plus size={16} />}{isAdding ? '取消新增' : '新增部門'}</button></div>{isAdding && <form className="employee-add-form department-add-form" onSubmit={submitDepartment}><label><span>部門代號 *</span><input value={draft.code} onChange={(event) => updateDraft('code', event.target.value)} placeholder="例如 FO" /></label><label><span>部門名稱 *</span><input value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} placeholder="例如 客務部" /></label><label><span>部門主管（非必填）</span><select value={draft.managerId} onChange={(event) => updateDraft('managerId', event.target.value)}><option value="">暫不指定</option>{data.employees.filter((employee) => employee.active).map((employee) => <option key={employee.id} value={employee.id}>{employee.employeeNo}｜{employee.name}</option>)}</select></label><button className="primary-button form-submit" type="submit" disabled={busyAction !== null}><Check size={16} />儲存部門</button></form>}<div className="employee-table-wrap"><table><thead><tr><th>部門代號</th><th>部門名稱</th><th>部門主管</th><th>狀態</th><th>操作</th></tr></thead><tbody>{data.departments.map((department) => { const editing = editingId === department.id; const legacyManager = !department.managerId && Boolean(department.manager); return <tr key={department.id}>{editing && editingDraft ? <><td><input className="table-input code-input" value={editingDraft.code} onChange={(event) => setEditingDraft({ ...editingDraft, code: event.target.value.toUpperCase() })} /></td><td><input className="table-input name-input" value={editingDraft.name} onChange={(event) => setEditingDraft({ ...editingDraft, name: event.target.value })} /></td><td><select className="table-input table-select" value={editingDraft.managerId} onChange={(event) => setEditingDraft({ ...editingDraft, managerId: event.target.value })}><option value="">暫不指定</option>{legacyManager && <option value="__legacy__">保留原主管：{department.manager}（未對應員工）</option>}{data.employees.filter((employee) => employee.active || employee.id === department.managerId).map((employee) => <option key={employee.id} value={employee.id}>{employee.employeeNo}｜{employee.name}</option>)}</select></td><td><span className="tag success">編輯中</span></td><td><div className="row-actions"><button className="table-action-button save" onClick={() => void saveDepartment(department.id)} disabled={busyAction !== null}><Check size={14} />儲存</button><button className="table-action-button" onClick={() => { setEditingId(null); setEditingDraft(null) }} disabled={busyAction !== null}>取消</button></div></td></> : <><td><span className="code-label">{department.code}</span></td><td><strong>{department.name}</strong></td><td>{department.manager || '尚未指定'}</td><td><span className="tag success">啟用中</span></td><td><button className="table-action-button" onClick={() => { setEditingId(department.id); setEditingDraft({ code: department.code, name: department.name, managerId: department.managerId ?? (department.manager ? '__legacy__' : '') }) }} disabled={busyAction !== null}><Pencil size={14} />編輯</button></td></>}</tr> })}</tbody></table></div></section>
 }
 
-function SettingsAdmin({ data, readOnly, networkDraft, setNetworkDraft, networkModeDraft, setNetworkModeDraft, saveNetworkSettings, updatePassword, busyAction }: { data: DemoData; readOnly: boolean; networkDraft: string; setNetworkDraft: (value: string) => void; networkModeDraft: NetworkMode; setNetworkModeDraft: (value: NetworkMode) => void; saveNetworkSettings: () => Promise<boolean>; updatePassword: (accountId: string, password: string) => Promise<boolean>; busyAction: BusyAction }) {
+function SettingsAdmin({ data, readOnly, networkDraft, setNetworkDraft, networkModeDraft, setNetworkModeDraft, adminIpExemptDraft, setAdminIpExemptDraft, saveNetworkSettings, checkNetwork, updatePassword, busyAction }: { data: DemoData; readOnly: boolean; networkDraft: string; setNetworkDraft: (value: string) => void; networkModeDraft: NetworkMode; setNetworkModeDraft: (value: NetworkMode) => void; adminIpExemptDraft: boolean; setAdminIpExemptDraft: (value: boolean) => void; saveNetworkSettings: () => Promise<boolean>; checkNetwork: () => Promise<NetworkCheckResult | null>; updatePassword: (accountId: string, password: string) => Promise<boolean>; busyAction: BusyAction }) {
   const [adminPasswordDraft, setAdminPasswordDraft] = useState('')
-  return <div className="settings-grid"><section className="content-card settings-card"><div className="card-heading"><div><p className="eyebrow">NETWORK ACCESS</p><h2>公司網路限制</h2><p className="muted">正式串接後，打卡請求會由伺服器檢查來源公網 IP，支援 IP、CIDR 與 IPv6 網段。</p></div><div className={`large-status ${data.network.mode === 'test' ? 'test' : 'strict'}`}>{data.network.mode === 'test' ? <CircleAlert size={20} /> : <ShieldCheck size={20} />}<span>{data.network.mode === 'test' ? '未限制 IP' : 'IP 限制已啟用'}</span></div></div><div className="mode-choice"><button className={networkModeDraft === 'test' ? 'selected' : ''} disabled={readOnly || busyAction !== null} onClick={() => setNetworkModeDraft('test')}><div className="choice-radio" /><div><strong>未限制 IP</strong><small>暫不限制來源網路，方便流程調校。</small></div></button><button className={networkModeDraft === 'strict' ? 'selected' : ''} disabled={readOnly || busyAction !== null} onClick={() => setNetworkModeDraft('strict')}><div className="choice-radio" /><div><strong>正式 IP 模式</strong><small>只允許下方列出的 IP、CIDR 或 IPv6 網段打卡。</small></div></button></div><label className="settings-label"><span>允許的 IP／CIDR／IPv6 網段</span><textarea rows={4} value={networkDraft} disabled={readOnly || busyAction !== null} onChange={(event) => setNetworkDraft(event.target.value)} placeholder="例如：203.0.113.25\n2001:db8::/32\n每行一組，也可用逗號分隔" /></label><div className="settings-hint"><Globe2 size={17} /><div><strong>目前儲存狀態</strong><span>{data.network.allowedIps.length ? `已設定 ${data.network.allowedIps.length} 組 · 最近更新 ${formatTaipeiDateTime(data.network.updatedAt)}` : '目前未限制 IP。'}</span></div></div><div className="form-actions">{!readOnly && <button className="primary-button" onClick={() => void saveNetworkSettings()} disabled={busyAction !== null}><Check size={16} />儲存網路設定</button>}</div></section><section className="content-card settings-card secondary-settings"><div className="card-heading"><div><p className="eyebrow">ACCOUNT SECURITY</p><h2>管理者密碼</h2><p className="muted">只有 admin 可重設 admin 或指定員工的雲端密碼。</p></div><KeyRound size={21} /></div>{!readOnly && <><label className="settings-label"><span>設定 ADMIN 新密碼</span><input className="settings-password-input" type="password" value={adminPasswordDraft} onChange={(event) => setAdminPasswordDraft(event.target.value)} placeholder="至少 6 個字元" /></label><button className="primary-button settings-save-button" onClick={async () => { if (await updatePassword('admin', adminPasswordDraft)) setAdminPasswordDraft('') }} disabled={busyAction !== null}><KeyRound size={15} />儲存管理者密碼</button></>}<div className="card-heading connection-heading"><div><p className="eyebrow">SUPABASE CONNECTION</p><h2>資料服務狀態</h2></div><div className={`connection-dot ${supabaseReady ? 'ready' : ''}`} /></div><div className="connection-row"><span>前端連線</span><strong>{supabaseReady ? '已偵測環境變數' : '尚未設定 Supabase Key'}</strong></div><div className="connection-row"><span>目前資料層</span><strong>Supabase 雲端</strong></div><p className="settings-copy">正式登入、員工、部門、出勤與網路設定都使用 Supabase 雲端；本頁不提供本機預覽資料備份或重設。</p></section></div>
-}
+  const [networkCheck, setNetworkCheck] = useState<NetworkCheckResult | null>(null)
 
+  async function inspectNetwork() {
+    setNetworkCheck(null)
+    const result = await checkNetwork()
+    if (result) setNetworkCheck(result)
+  }
+
+  const savedNetworkSummary = data.network.mode === 'test'
+    ? '目前未限制 IP。'
+    : data.network.allowedIps.length
+      ? `已設定 ${data.network.allowedIps.length} 組 · 最近更新 ${formatTaipeiDateTime(data.network.updatedAt)}`
+      : '正式 IP 模式；刷卡依伺服器允許清單檢查。'
+
+  return <div className="settings-grid"><section className="content-card settings-card"><div className="card-heading"><div><p className="eyebrow">NETWORK ACCESS</p><h2>公司網路限制</h2><p className="muted">正式串接後，打卡請求會由伺服器檢查來源公網 IP，支援 IP、CIDR 與 IPv6 網段。</p></div><div className={`large-status ${data.network.mode === 'test' ? 'test' : 'strict'}`}>{data.network.mode === 'test' ? <CircleAlert size={20} /> : <ShieldCheck size={20} />}<span>{data.network.mode === 'test' ? '未限制 IP' : 'IP 限制已啟用'}</span></div></div><div className="mode-choice"><button type="button" className={networkModeDraft === 'test' ? 'selected' : ''} disabled={readOnly || busyAction !== null} onClick={() => setNetworkModeDraft('test')}><div className="choice-radio" /><div><strong>未限制 IP</strong><small>暫不限制來源網路，方便流程調校。</small></div></button><button type="button" className={networkModeDraft === 'strict' ? 'selected' : ''} disabled={readOnly || busyAction !== null} onClick={() => setNetworkModeDraft('strict')}><div className="choice-radio" /><div><strong>正式 IP 模式</strong><small>只允許下方列出的 IP、CIDR 或 IPv6 網段打卡。</small></div></button></div><label className="settings-label"><span>允許的 IP／CIDR／IPv6 網段</span><textarea rows={4} value={networkDraft} disabled={readOnly || busyAction !== null} onChange={(event) => setNetworkDraft(event.target.value)} placeholder="例如：203.0.113.25
+2001:db8::/32
+每行一組，也可用逗號分隔" /></label><label className="settings-checkbox"><input type="checkbox" checked={adminIpExemptDraft} disabled={readOnly || busyAction !== null} onChange={(event) => setAdminIpExemptDraft(event.target.checked)} /><span>ADMIN 帳號刷卡可略過 IP 檢查</span></label><p className="settings-note">僅 admin 可修改此設定；HR 僅可檢視。只對後端指定的 ADMIN 帳號 UUID 生效；其他 Admin 角色不會自動例外。登入、查詢與下載不受 IP 限制，只有刷卡會檢查。</p><div className="settings-hint"><Globe2 size={17} /><div><strong>目前儲存狀態</strong><span>{savedNetworkSummary}</span></div></div><div className="network-check-panel"><div className="network-check-heading"><div><strong>目前網路檢查</strong><span>由伺服器判定可信公網 IP 與本帳號刷卡權限。</span></div><button type="button" className="secondary-button" onClick={() => void inspectNetwork()} disabled={busyAction !== null}><Network size={16} />檢查目前網路</button></div>{networkCheck ? <div className={`network-check-result ${networkCheck.canPunch ? 'allowed' : 'denied'}`}><div><span>可信公網 IP</span><strong>{networkCheck.observedIp ?? '無法取得'}</strong></div><div><span>刷卡結果</span><strong>{networkCheck.canPunch ? '允許刷卡' : '拒絕刷卡'}</strong></div><div><span>ADMIN 例外</span><strong>{networkCheck.adminExempt ? '是，本帳號適用' : '否，本帳號不適用'}</strong></div><div><span>伺服器模式</span><strong>{networkCheck.mode === 'test' ? '未限制 IP' : '正式 IP 模式'}</strong></div></div> : <p className="network-check-empty">尚未檢查；按下按鈕後顯示目前可信公網 IP、刷卡允許／拒絕與 ADMIN 例外狀態。</p>}</div><div className="form-actions">{!readOnly && <button className="primary-button" onClick={() => void saveNetworkSettings()} disabled={busyAction !== null}><Check size={16} />儲存網路設定</button>}</div></section><section className="content-card settings-card secondary-settings"><div className="card-heading"><div><p className="eyebrow">ACCOUNT SECURITY</p><h2>管理者密碼</h2><p className="muted">只有 admin 可重設 admin 或指定員工的雲端密碼。</p></div><KeyRound size={21} /></div>{!readOnly && <><label className="settings-label"><span>設定 ADMIN 新密碼</span><input className="settings-password-input" type="password" value={adminPasswordDraft} onChange={(event) => setAdminPasswordDraft(event.target.value)} placeholder="至少 6 個字元" /></label><button className="primary-button settings-save-button" onClick={async () => { if (await updatePassword('admin', adminPasswordDraft)) setAdminPasswordDraft('') }} disabled={busyAction !== null}><KeyRound size={15} />儲存管理者密碼</button></>}<div className="card-heading connection-heading"><div><p className="eyebrow">SUPABASE CONNECTION</p><h2>資料服務狀態</h2></div><div className={`connection-dot ${supabaseReady ? 'ready' : ''}`} /></div><div className="connection-row"><span>前端連線</span><strong>{supabaseReady ? '已偵測環境變數' : '尚未設定 Supabase Key'}</strong></div><div className="connection-row"><span>目前資料層</span><strong>Supabase 雲端</strong></div><p className="settings-copy">正式登入、員工、部門、出勤與網路設定都使用 Supabase 雲端；本頁不提供本機預覽資料備份或重設。</p></section></div>
+}
 function EmptyState({ title, detail }: { title: string; detail: string }) { return <div className="empty-state"><div className="empty-icon"><FileSpreadsheet size={20} /></div><strong>{title}</strong><span>{detail}</span></div> }
 function ToastMessage({ toast }: { toast: Toast }) { return <div className={`toast ${toast.tone}`}><span className="toast-icon">{toast.tone === 'success' ? <Check size={15} /> : toast.tone === 'error' ? <X size={15} /> : <CircleAlert size={15} />}</span>{toast.message}</div> }
 

@@ -37,6 +37,15 @@ export interface NetworkSettings {
   mode: NetworkMode
   allowedIps: string[]
   updatedAt: string
+  adminIpExempt?: boolean
+}
+
+export interface NetworkCheckResult {
+  ok: true
+  canPunch: boolean
+  adminExempt: boolean
+  mode: NetworkMode
+  observedIp: string | null
 }
 
 export interface DemoData {

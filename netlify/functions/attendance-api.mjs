@@ -144,14 +144,20 @@ async function getProfile(db, id, message = '找不到指定員工。') {
   return data
 }
 
+function trustedClientIp(context) {
+  const ip = context?.ip
+  return isIP(ip || '') ? ip : null
+}
+
 async function loadNetwork(db) {
   const [{ data: settings, error: settingsError }, { data: networks, error: networkError }] = await Promise.all([
-    db.from('system_settings').select('id, network_mode, updated_at').eq('id', 1).maybeSingle(),
+    db.from('system_settings').select('id, network_mode, admin_ip_exempt, admin_exempt_profile_id, updated_at').eq('id', 1).maybeSingle(),
     db.from('allowed_networks').select('id, network').eq('is_active', true).order('id'),
   ])
   if (settingsError || networkError || !settings) throw fail('公司網路設定讀取失敗。')
   return {
     mode: settings.network_mode === 'strict' ? 'strict' : 'test',
+    adminIpExempt: settings.admin_ip_exempt === true,
     updatedAt: settings.updated_at,
     networks: networks || [],
   }
@@ -195,7 +201,7 @@ async function loadSnapshot(db, profile) {
     allRows(() => {
       let query = db
         .from('attendance_records')
-        .select('id, employee_id, attendance_type, punched_at, client_ip, status, matched_network_id')
+        .select('id, employee_id, attendance_type, punched_at, client_ip, status, note, matched_network_id')
         .order('punched_at', { ascending: false })
         .order('id')
       if (!globalRole) {
@@ -248,16 +254,19 @@ async function loadSnapshot(db, profile) {
       type: record.attendance_type,
       punchedAt: record.punched_at,
       ip: record.client_ip || '',
-      networkName: record.matched_network_id ? '公司允許網路' : '未限制網路',
+      networkName: network.mode === 'strict' && record.note === 'ADMIN_IP_EXEMPT'
+        ? '管理者 IP 例外'
+        : (record.matched_network_id ? '公司允許網路' : '未限制網路'),
       // Manual API records are intentionally returned as normal accepted records.
       status: record.status === 'rejected' ? 'rejected' : 'accepted',
     })),
     adminPassword: '',
     network: {
       mode: network.mode,
-      // Test-mode values are retained as an admin-only draft; other roles never
+      // Test-mode values are retained as an admin/HR-only draft; other roles never
       // receive the whitelist, even though they can see the current mode.
-      allowedIps: profile.role === 'admin' ? network.networks.map((item) => item.network) : [],
+      allowedIps: ['admin', 'hr'].includes(profile.role) ? network.networks.map((item) => item.network) : [],
+      ...(['admin', 'hr'].includes(profile.role) ? { adminIpExempt: network.adminIpExempt } : {}),
       updatedAt: network.updatedAt,
     },
   }
@@ -265,10 +274,12 @@ async function loadSnapshot(db, profile) {
 
 async function handlePunch(db, profile, input, context, request) {
   if (!VALID_ATTENDANCE_TYPES.has(input.type)) throw fail('刷卡班別不正確。', 400)
-  const network = await loadNetwork(db)
-  const ip = isIP(context?.ip || '') ? context.ip : null
-  const match = ip ? network.networks.find((item) => networkMatches(ip, item.network)) : undefined
-  if (network.mode === 'strict' && !match) throw fail('目前不在允許的公司網路，無法刷卡。', 403)
+  const ip = trustedClientIp(context)
+  const networkStatus = await rpc(db, 'management_network_status', {
+    p_actor_uuid: profile.id,
+    p_client_ip: ip,
+  }, '網路狀態檢查失敗，請稍後重試。')
+  if (networkStatus.canPunch !== true) throw fail('目前不在允許的公司網路，無法刷卡。', 403)
   const result = await rpc(db, 'management_punch', {
     p_actor_uuid: profile.id,
     p_attendance_type: input.type,
@@ -610,6 +621,9 @@ async function handleAttendanceUpdate(db, profile, payload) {
 async function handleNetworkSave(db, profile, payload) {
   assertManagementRole(profile, ['admin'], '只有 Admin 可以設定公司網路。')
   if (!['test', 'strict'].includes(payload?.mode) || !Array.isArray(payload.allowedIps)) throw fail('網路設定資料不正確。', 400)
+  if (Object.hasOwn(payload, 'adminIpExempt') && typeof payload.adminIpExempt !== 'boolean') {
+    throw fail('ADMIN IP 例外設定不正確。', 400)
+  }
   if (payload.allowedIps.length > 100) throw fail('允許網路數量過多。', 400)
   const networks = []
   const seen = new Set()
@@ -622,12 +636,18 @@ async function handleNetworkSave(db, profile, payload) {
     }
   }
   if (payload.mode === 'strict' && networks.length === 0) throw fail('正式模式至少需要一組有效 CIDR。', 400)
-  const result = await rpc(db, 'management_save_network', {
+  const result = await rpc(db, 'management_save_network_v2', {
     p_actor_uuid: profile.id,
     p_mode: payload.mode,
     p_allowed_ips: networks,
+    p_admin_ip_exempt: Object.hasOwn(payload, 'adminIpExempt') ? payload.adminIpExempt : null,
   }, '網路設定儲存失敗，原設定未變更。', 400)
-  return { ok: true, mode: result.mode, allowedIps: result.allowedIps || [] }
+  return {
+    ok: true,
+    mode: result.mode,
+    allowedIps: result.allowedIps || [],
+    adminIpExempt: result.adminIp_exempt === true || result.adminIpExempt === true,
+  }
 }
 
 export default async function handler(request, context) {
@@ -650,6 +670,10 @@ export default async function handler(request, context) {
       case 'attendance.update': return response(await handleAttendanceUpdate(db, profile, input))
       case 'department.create': return response(await handleDepartmentCreate(db, profile, input))
       case 'department.update': return response(await handleDepartmentUpdate(db, profile, input))
+      case 'network.check': return response(await rpc(db, 'management_network_status', {
+        p_actor_uuid: profile.id,
+        p_client_ip: trustedClientIp(context),
+      }, '網路狀態檢查失敗，請稍後重試。'))
       case 'network.save': return response(await handleNetworkSave(db, profile, input))
       default: throw fail('不支援的管理操作。', 400)
     }
