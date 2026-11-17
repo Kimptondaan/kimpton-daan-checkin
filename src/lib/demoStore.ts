@@ -55,7 +55,8 @@ export function toTxt(records: AttendanceRecord[], employees: Employee[]) {
       if (!employee || !employee.employeeNo) throw new Error('找不到紀錄所屬員工，請重新整理後再下載。')
       const p = localParts(record.punchedAt)
       const punchCode = record.type === 'check_in' ? 'F1' : 'F2'
-      return `${p.year}${p.month}${p.day}${p.hour}${p.minute}${employee.employeeNo}${punchCode}`
+      const paddedEmployeeNo = employee.employeeNo.padStart(10, '0')
+      return `${p.year}${p.month}${p.day}${p.hour}${p.minute}${paddedEmployeeNo}${punchCode}`
     }).join('\r\n')
 }
 
