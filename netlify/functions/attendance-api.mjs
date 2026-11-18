@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { BlockList, isIP } from 'node:net'
+import { handleOwnPasswordChange } from '../lib/self-password.mjs'
 
 const AUTH_EMAIL_DOMAIN = 'checkin.kimptondaan.local'
 const DEFAULT_PASSWORD = '00000000'
@@ -29,7 +30,7 @@ function normalizeEmployeeNo(value) {
 
 function passwordValue(value, allowDefault = false) {
   if (value === undefined && allowDefault) return DEFAULT_PASSWORD
-  if (typeof value !== 'string' || value.length < 6 || value.length > 128) return ''
+  if (typeof value !== 'string' || Array.from(value).length < 8 || Array.from(value).length > 128 || /\p{Cc}/u.test(value)) return ''
   return value
 }
 
@@ -556,7 +557,7 @@ async function handlePasswordSet(db, profile, payload) {
   assertManagementRole(profile, ['admin'], '只有 Admin 可以重設密碼。')
   if (!payload || typeof payload !== 'object') throw fail('密碼資料不正確。', 400)
   const value = passwordValue(payload.password)
-  if (!value) throw fail('密碼至少需要 6 個字元。', 400)
+  if (!value) throw fail('密碼至少需要 8 個字元，最多 128 個字元，且不可包含控制字元。', 400)
   let targetId = payload.id
   if (targetId === 'admin') {
     const { data: profiles, error } = await db.from('profiles').select('id, employee_no, role, is_active').ilike('employee_no', 'ADMIN').limit(10)
@@ -709,7 +710,7 @@ async function handleNetworkSave(db, profile, payload) {
 
 export default async function handler(request, context) {
   try {
-    const { db, profile } = await authenticate(request)
+    const { db, profile, user } = await authenticate(request)
     if (request.method === 'GET') return response(await loadSnapshot(db, profile))
     if (request.method !== 'POST') return response({ message: '不支援的操作。' }, 405)
     const input = await request.json().catch(() => { throw fail('請求內容不正確。', 400) })
@@ -722,6 +723,7 @@ export default async function handler(request, context) {
       case 'employee.update': return response(await handleEmployeeUpdate(db, profile, input))
       case 'employee.active': return response(await handleEmployeeActive(db, profile, input))
       case 'password.set': return response(await handlePasswordSet(db, profile, input))
+      case 'password.change': return response(await handleOwnPasswordChange(user, profile, input))
       case 'employees.import': return response(await handleImport(db, profile, input))
       case 'attendance.create': return response(await handleAttendanceCreate(db, profile, input))
       case 'attendance.update': return response(await handleAttendanceUpdate(db, profile, input))

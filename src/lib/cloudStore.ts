@@ -18,9 +18,10 @@ export async function cloudRequest<T>(body?: Record<string, unknown>, expectedUs
   if (!supabase) throw new Error('網站的 Supabase 連線設定尚未完成，請聯絡管理者。')
   const { data, error } = await supabase.auth.getSession()
   if (error || !data.session) throw new Error('登入已失效，請重新登入。')
-  if (expectedUserId && data.session.user.id !== expectedUserId) throw new Error('登入帳號已在其他分頁變更；請重新整理或重新登入，再確認自己的姓名後刷卡。')
+  if (expectedUserId && data.session.user.id !== expectedUserId) throw new Error('登入帳號已在其他分頁變更；請重新整理或重新登入，再確認自己的姓名後操作。')
   const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), body?.action === 'employees.import' ? 55000 : 20000)
+  const timeout = body?.action === 'employees.import' ? 55000 : body?.action === 'password.change' ? 45000 : 20000
+  const timer = window.setTimeout(() => controller.abort(), timeout)
   try {
     const response = await fetch('/api/attendance', {
       method: body ? 'POST' : 'GET',
@@ -64,3 +65,7 @@ export const checkNetworkCloud = (expectedUserId?: string) => cloudRequest<Netwo
 
 export const saveAnnouncementCloud = (format: Announcement['format'], items: string[], expectedVersion: number, expectedUserId?: string) =>
   cloudRequest<{ ok: true; announcement: Announcement }>({ action: 'announcement.save', format, items, expectedVersion }, expectedUserId)
+
+
+export const changeOwnPasswordCloud = (currentPassword: string, newPassword: string, expectedUserId: string) =>
+  cloudRequest<{ ok: true }>({ action: 'password.change', currentPassword, newPassword }, expectedUserId)

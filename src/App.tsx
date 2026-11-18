@@ -33,11 +33,13 @@ import {
 import type { Announcement, AttendanceRecord, DemoData, Employee, NetworkCheckResult, NetworkMode, UserRole } from './lib/types'
 import { fromTaipeiLocal, toTaipeiLocal, toTxt } from './lib/demoStore'
 import AnnouncementPanel from './components/AnnouncementPanel'
+import ChangePasswordPanel from './components/ChangePasswordPanel'
 import { supabase, supabaseReady } from './lib/supabase'
 import {
   addAttendanceCloud,
   addDepartmentCloud,
   checkNetworkCloud,
+  changeOwnPasswordCloud,
   addEmployeeCloud,
   importEmployeesCloud,
   loadCloudData,
@@ -63,7 +65,7 @@ const VALID_USER_ROLES: ReadonlySet<UserRole> = new Set(['employee', 'manager', 
 
 const TAIPEI_TIME_ZONE = 'Asia/Taipei'
 
-type View = 'dashboard' | 'attendance' | 'clock' | 'personal' | 'employees' | 'departments' | 'settings' | 'announcement'
+type View = 'dashboard' | 'attendance' | 'clock' | 'personal' | 'employees' | 'departments' | 'settings' | 'announcement' | 'password'
 type Session = { role: UserRole; employee?: Employee }
 type NewEmployee = { employeeNo: string; name: string; departmentCode: string; title: string; accessRole: UserRole }
 type EmployeePatch = NewEmployee
@@ -129,6 +131,7 @@ function App() {
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
   const [loginBusy, setLoginBusy] = useState(false)
   const [loginError, setLoginError] = useState('')
+  const [loginNotice, setLoginNotice] = useState('')
   const [punchBusy, setPunchBusy] = useState(false)
   const [punchFeedback, setPunchFeedback] = useState<Toast | null>(null)
   const [session, setSession] = useState<Session | null>(null)
@@ -274,6 +277,7 @@ function App() {
     if (loginBusy) return
     const normalized = employeeNo.trim().toUpperCase()
     setLoginError('')
+    setLoginNotice('')
     if (!normalized || !password) { setLoginError('請輸入帳號與密碼。'); return }
     if (!/^[A-Z0-9][A-Z0-9._-]*$/.test(normalized)) { setLoginError('員工編號格式不正確。'); return }
     if (!supabase) { setLoginError('網站的 Supabase 連線設定尚未完成，請聯絡管理者。'); return }
@@ -286,6 +290,7 @@ function App() {
         ? '員工編號或密碼不正確，請確認帳號已搬移至雲端。'
         : '登入服務暫時無法連線，請檢查網路後再試。')
       await openCloudSession(auth.user.id)
+      setLoginNotice('')
       setPassword('')
       notify('雲端登入成功，歡迎回來。')
     } catch (error) {
@@ -294,9 +299,17 @@ function App() {
     } finally { setLoginBusy(false) }
   }
 
-  async function logout() {
-    const result = await supabase?.auth.signOut({ scope: 'local' })
-    if (result?.error) { notify('登出未完成，請檢查網路後重試。', 'error'); return }
+  async function logout(silent = false): Promise<boolean> {
+    try {
+      const result = await supabase?.auth.signOut({ scope: 'local' })
+      if (result?.error) {
+        if (!silent) notify('登出未完成，請檢查網路後重試。', 'error')
+        return false
+      }
+    } catch (error) {
+      if (!silent) notify(errorText(error, '登出未完成，請檢查網路後重試。'), 'error')
+      return false
+    }
     setSession(null)
     setCloudData(null)
     setLastSyncedAt(null)
@@ -305,6 +318,8 @@ function App() {
     setLoginError('')
     setPunchFeedback(null)
     setMobileNavOpen(false)
+    setToast(null)
+    return true
   }
 
   async function handlePunch(type: 'check_in' | 'check_out') {
@@ -518,16 +533,45 @@ function App() {
 
   async function updatePassword(accountId: string, nextPassword: string) {
     if (session?.role !== 'admin') { notify('只有 admin 可以重設密碼。', 'error'); return false }
-    const value = nextPassword.trim()
-    if (value.length < 6) { notify('密碼至少需要 6 個字元。', 'error'); return false }
+    const passwordLength = Array.from(nextPassword).length
+    if (passwordLength < 8) { notify('密碼至少需要 8 個字元。', 'error'); return false }
+    if (passwordLength > 128) { notify('密碼不可超過 128 個字元。', 'error'); return false }
     const action = `password.set:${accountId}`
     if (!startBusy(action)) return false
     try {
-      await setPasswordCloud(accountId, value)
+      await setPasswordCloud(accountId, nextPassword)
       await refreshAfterWrite('密碼已更新，下次登入請使用新密碼。')
       return true
     } catch (error) { notify(errorText(error, '密碼更新失敗。'), 'error'); return false }
     finally { endBusy(action) }
+  }
+
+  async function changeOwnPassword(currentPassword: string, newPassword: string): Promise<void> {
+    const expectedUserId = session?.employee?.id
+    if (!expectedUserId) throw new Error('目前登入帳號無法確認，請重新登入後再試。')
+    const action = 'password.change'
+    if (!startBusy(action)) throw new Error('另一項操作仍在處理中，請稍後再試。')
+    try {
+      await changeOwnPasswordCloud(currentPassword, newPassword, expectedUserId)
+      const loggedOut = await logout(true)
+      if (!loggedOut) {
+        refreshGenerationRef.current += 1
+        refreshPromiseRef.current = null
+        setSession(null)
+        setCloudData(null)
+        setLastSyncedAt(null)
+        setEmployeeNo('')
+        setPassword('')
+        setLoginError('')
+        setPunchFeedback(null)
+        setMobileNavOpen(false)
+        setToast(null)
+      }
+      const successMessage = '密碼已更新，手機與電腦下次登入請使用新密碼。'
+      setLoginNotice(loggedOut ? successMessage : `${successMessage} 本裝置登出未完成，請手動登出後再以新密碼登入。`)
+    } finally {
+      endBusy(action)
+    }
   }
 
   function exportAttendance(records: DemoData['records']) {
@@ -543,11 +587,11 @@ function App() {
   }
 
   if (!session) {
-    return <LoginPage {...{ loginMode, setLoginMode, employeeNo, setEmployeeNo, password, setPassword, handleLogin, loginBusy, loginError }} />
+    return <LoginPage {...{ loginMode, setLoginMode, employeeNo, setEmployeeNo, password, setPassword, handleLogin, loginBusy, loginError, loginNotice }} />
   }
 
   if (session.role === 'employee' && session.employee) {
-    return <EmployeePortal employee={session.employee} data={data} now={now} lastSyncedAt={lastSyncedAt} activeView={activeView} setActiveView={setActiveView} handlePunch={handlePunch} punchBusy={punchBusy} punchFeedback={punchFeedback} saveAnnouncement={saveAnnouncement} announcementBusy={busyAction !== null} exportAttendance={exportAttendance} logout={logout} toast={toast} />
+    return <EmployeePortal employee={session.employee} data={data} now={now} lastSyncedAt={lastSyncedAt} activeView={activeView} setActiveView={setActiveView} handlePunch={handlePunch} punchBusy={punchBusy} punchFeedback={punchFeedback} saveAnnouncement={saveAnnouncement} announcementBusy={busyAction !== null} exportAttendance={exportAttendance} changeOwnPassword={changeOwnPassword} changePasswordBusy={busyAction !== null} logout={logout} toast={toast} />
   }
 
   return <AdminShell
@@ -583,6 +627,7 @@ function App() {
     addDepartment={addDepartment}
     updateDepartment={updateDepartment}
     updatePassword={updatePassword}
+    changeOwnPassword={changeOwnPassword}
     saveAnnouncement={saveAnnouncement}
     busyAction={busyAction}
     toast={toast}
@@ -599,6 +644,7 @@ function LoginPage(props: {
   handleLogin: (event: FormEvent) => void | Promise<void>
   loginBusy: boolean
   loginError: string
+  loginNotice: string
 }) {
   return <main className="login-page">
     <div className="login-art" aria-hidden="true"><div className="art-topline"><span>DAAN DISTRICT</span><span>INTERNAL USE</span></div><div className="art-wordmark"><span className="mark-line" />KIMPTON<span className="mark-line" /></div><div className="art-caption">A softer way to start the day.</div><div className="art-footer"><span>大安金普頓</span><span>TAIPEI · 2026</span></div></div>
@@ -606,21 +652,48 @@ function LoginPage(props: {
       <div className="login-brand"><div className="brand-mark">K</div><div><p className="eyebrow">DAAN KIMPTON</p><h1>員工刷卡系統</h1></div></div>
       <div className="login-intro"><p className="eyebrow">GOOD TO SEE YOU</p><h2>準備開始今天的班次了嗎？</h2><p>使用員工編號登入，簡單完成每一次上下班刷卡。</p></div>
       <div className="mode-switch" role="tablist" aria-label="登入身分"><button className={props.loginMode === 'employee' ? 'active' : ''} onClick={() => props.setLoginMode('employee')} type="button"><UserRound size={16} />員工登入</button><button className={props.loginMode === 'admin' ? 'active' : ''} onClick={() => props.setLoginMode('admin')} type="button"><ShieldCheck size={16} />管理者登入</button></div>
-      <form className="login-form" onSubmit={props.handleLogin}><label><span>{props.loginMode === 'admin' ? '管理者帳號' : '員工編號'}</span><div className="input-wrap"><UserRound size={18} /><input disabled={props.loginBusy} autoCapitalize="none" spellCheck={false} value={props.employeeNo} onChange={(event) => props.setEmployeeNo(event.target.value)} autoComplete="username" /></div></label><label><span>登入密碼</span><div className="input-wrap"><KeyRound size={18} /><input type="password" disabled={props.loginBusy} value={props.password} onChange={(event) => props.setPassword(event.target.value)} autoComplete="current-password" /></div></label><button className="primary-button login-button" type="submit" disabled={props.loginBusy} aria-busy={props.loginBusy}>{props.loginBusy ? '登入中…' : '進入系統'} <ChevronRight size={18} /></button>{props.loginError && <p className="login-error" role="alert">{props.loginError}</p>}</form>
+      <form className="login-form" onSubmit={props.handleLogin}><label><span>{props.loginMode === 'admin' ? '管理者帳號' : '員工編號'}</span><div className="input-wrap"><UserRound size={18} /><input disabled={props.loginBusy} autoCapitalize="none" spellCheck={false} value={props.employeeNo} onChange={(event) => props.setEmployeeNo(event.target.value)} autoComplete="username" /></div></label><label><span>登入密碼</span><div className="input-wrap"><KeyRound size={18} /><input type="password" disabled={props.loginBusy} value={props.password} onChange={(event) => props.setPassword(event.target.value)} autoComplete="current-password" /></div></label><button className="primary-button login-button" type="submit" disabled={props.loginBusy} aria-busy={props.loginBusy}>{props.loginBusy ? '登入中…' : '進入系統'} <ChevronRight size={18} /></button>{props.loginNotice && <p className="login-notice" role="status" aria-live="polite">{props.loginNotice}</p>}{props.loginError && <p className="login-error" role="alert">{props.loginError}</p>}</form>
       <p className="login-footnote">資料服務：Supabase 雲端。請使用管理者提供的雲端帳號登入。</p>
     </section>
   </main>
 }
 
-function EmployeePortal({ employee, data, now, lastSyncedAt, activeView, setActiveView, handlePunch, punchBusy, punchFeedback, saveAnnouncement, announcementBusy, exportAttendance, logout, toast }: {
-  employee: Employee; data: DemoData; now: Date; lastSyncedAt: string | null; activeView: View; setActiveView: (value: View) => void; handlePunch: (type: 'check_in' | 'check_out') => void; punchBusy: boolean; punchFeedback: Toast | null; saveAnnouncement: SaveAnnouncement; announcementBusy: boolean; exportAttendance: (records: DemoData['records']) => void; logout: () => void; toast: Toast | null
+function EmployeePortal({ employee, data, now, lastSyncedAt, activeView, setActiveView, handlePunch, punchBusy, punchFeedback, saveAnnouncement, announcementBusy, exportAttendance, changeOwnPassword, changePasswordBusy, logout, toast }: {
+  employee: Employee; data: DemoData; now: Date; lastSyncedAt: string | null; activeView: View; setActiveView: (value: View) => void; handlePunch: (type: 'check_in' | 'check_out') => void; punchBusy: boolean; punchFeedback: Toast | null; saveAnnouncement: SaveAnnouncement; announcementBusy: boolean; exportAttendance: (records: DemoData['records']) => void; changeOwnPassword: (currentPassword: string, newPassword: string) => Promise<void>; changePasswordBusy: boolean; logout: () => void | Promise<boolean>; toast: Toast | null
 }) {
   const todayRecords = data.records.filter((record) => record.employeeId === employee.id && isSameTaipeiDay(record.punchedAt))
   const didCheckIn = todayRecords.some((record) => record.type === 'check_in')
   const didCheckOut = todayRecords.some((record) => record.type === 'check_out')
   const latestRecords = data.records.filter((record) => record.employeeId === employee.id).slice(0, 6)
-  const mobileEmployeeNav = <nav className="mobile-employee-nav" aria-label="員工快速導覽"><button type="button" className={activeView === 'dashboard' ? 'active' : ''} aria-current={activeView === 'dashboard' ? 'page' : undefined} onClick={() => setActiveView('dashboard')}><Clock3 size={17} />今日刷卡</button><button type="button" className={activeView === 'attendance' ? 'active' : ''} aria-current={activeView === 'attendance' ? 'page' : undefined} onClick={() => setActiveView('attendance')}><CalendarDays size={17} />我的紀錄</button></nav>
-  return <div className="employee-app"><header className="mobile-topbar"><div className="brand-inline"><div className="brand-mark small">K</div><span>大安金普頓</span></div><button className="icon-button" onClick={logout} aria-label="登出"><LogOut size={18} /></button></header>{mobileEmployeeNav}<div className="employee-shell"><aside className="employee-rail"><div className="rail-brand"><div className="brand-mark">K</div><p>DAAN<br />KIMPTON</p></div><div className="rail-person"><div className="avatar">{employee.name.slice(0, 1)}</div><div><strong>{employee.name}</strong><small>{employee.employeeNo} · {employee.department}</small></div></div><nav className="rail-nav"><button className={activeView === 'dashboard' ? 'active' : ''} onClick={() => setActiveView('dashboard')}><Clock3 size={18} />今日刷卡</button><button className={activeView === 'attendance' ? 'active' : ''} onClick={() => setActiveView('attendance')}><CalendarDays size={18} />我的紀錄</button></nav><button className="rail-logout" onClick={logout}><LogOut size={17} />登出</button></aside><main className="employee-main"><div className="page-heading"><div><p className="eyebrow">EMPLOYEE PORTAL</p><h1>{activeView === 'dashboard' ? '今天，從容開始。' : '我的刷卡紀錄'}</h1><p className="muted">{formatTaipeiDate(now.toISOString())} · {formatTaipeiTime(now.toISOString())}</p></div></div>{activeView === 'dashboard' ? <EmployeeDashboard employee={employee} data={data} now={now} lastSyncedAt={lastSyncedAt} didCheckIn={didCheckIn} didCheckOut={didCheckOut} handlePunch={handlePunch} punchBusy={punchBusy} punchFeedback={punchFeedback} saveAnnouncement={saveAnnouncement} canEditAnnouncement={false} announcementBusy={announcementBusy} /> : <PersonalRecords records={latestRecords} allRecords={data.records.filter((record) => record.employeeId === employee.id)} exportAttendance={exportAttendance} />}</main></div>{toast && <ToastMessage toast={toast} />}</div>
+  const pageTitle = activeView === 'dashboard' ? '今天，從容開始。' : activeView === 'password' ? '修改我的密碼' : '我的刷卡紀錄'
+  const mobileEmployeeNav = <nav className="mobile-employee-nav" aria-label="員工快速導覽">
+    <button type="button" className={activeView === 'dashboard' ? 'active' : ''} aria-current={activeView === 'dashboard' ? 'page' : undefined} onClick={() => setActiveView('dashboard')}><Clock3 size={17} /><span>今日刷卡</span></button>
+    <button type="button" className={activeView === 'attendance' ? 'active' : ''} aria-current={activeView === 'attendance' ? 'page' : undefined} onClick={() => setActiveView('attendance')}><CalendarDays size={17} /><span>我的紀錄</span></button>
+    <button type="button" className={activeView === 'password' ? 'active' : ''} aria-current={activeView === 'password' ? 'page' : undefined} onClick={() => setActiveView('password')}><KeyRound size={17} /><span>修改我的密碼</span></button>
+  </nav>
+  return <div className="employee-app">
+    <header className="mobile-topbar"><div className="brand-inline"><div className="brand-mark small">K</div><span>大安金普頓</span></div><button className="icon-button" onClick={() => void logout()} aria-label="登出"><LogOut size={18} /></button></header>
+    {mobileEmployeeNav}
+    <div className="employee-shell">
+      <aside className="employee-rail">
+        <div className="rail-brand"><div className="brand-mark">K</div><p>DAAN<br />KIMPTON</p></div>
+        <div className="rail-person"><div className="avatar">{employee.name.slice(0, 1)}</div><div><strong>{employee.name}</strong><small>{employee.employeeNo} · {employee.department}</small></div></div>
+        <nav className="rail-nav">
+          <button className={activeView === 'dashboard' ? 'active' : ''} onClick={() => setActiveView('dashboard')}><Clock3 size={18} />今日刷卡</button>
+          <button className={activeView === 'attendance' ? 'active' : ''} onClick={() => setActiveView('attendance')}><CalendarDays size={18} />我的紀錄</button>
+          <button className={activeView === 'password' ? 'active' : ''} onClick={() => setActiveView('password')}><KeyRound size={18} />修改我的密碼</button>
+        </nav>
+        <button className="rail-logout" onClick={() => void logout()}><LogOut size={17} />登出</button>
+      </aside>
+      <main className="employee-main">
+        <div className="page-heading"><div><p className="eyebrow">EMPLOYEE PORTAL</p><h1>{pageTitle}</h1><p className="muted">{formatTaipeiDate(now.toISOString())} · {formatTaipeiTime(now.toISOString())}</p></div></div>
+        {activeView === 'dashboard' && <EmployeeDashboard employee={employee} data={data} now={now} lastSyncedAt={lastSyncedAt} didCheckIn={didCheckIn} didCheckOut={didCheckOut} handlePunch={handlePunch} punchBusy={punchBusy} punchFeedback={punchFeedback} saveAnnouncement={saveAnnouncement} canEditAnnouncement={false} announcementBusy={announcementBusy} />}
+        {activeView === 'attendance' && <PersonalRecords records={latestRecords} allRecords={data.records.filter((record) => record.employeeId === employee.id)} exportAttendance={exportAttendance} />}
+        {activeView === 'password' && <ChangePasswordPanel key={employee.id} onChangePassword={changeOwnPassword} busy={changePasswordBusy} />}
+      </main>
+    </div>
+    {toast && <ToastMessage toast={toast} />}
+  </div>
 }
 
 function EmployeeDashboard({ employee, data, now, lastSyncedAt, didCheckIn, didCheckOut, handlePunch, punchBusy, punchFeedback, saveAnnouncement, canEditAnnouncement, announcementBusy }: { employee: Employee; data: DemoData; now: Date; lastSyncedAt: string | null; didCheckIn: boolean; didCheckOut: boolean; handlePunch: (type: 'check_in' | 'check_out') => void; punchBusy: boolean; punchFeedback: Toast | null; saveAnnouncement: SaveAnnouncement; canEditAnnouncement: boolean; announcementBusy: boolean }) {
@@ -695,10 +768,10 @@ function PersonalRecords({ records, allRecords, exportAttendance }: { records: D
 }
 
 function AdminShell(props: {
-  data: DemoData; accessRole: UserRole; scopeDepartmentCode?: string; now: Date; lastSyncedAt: string | null; activeView: View; setActiveView: (value: View) => void; mobileNavOpen: boolean; setMobileNavOpen: (value: boolean) => void; logout: () => void; exportAttendance: (records: DemoData['records']) => void; networkDraft: string; setNetworkDraft: (value: string) => void; networkModeDraft: NetworkMode; setNetworkModeDraft: (value: NetworkMode) => void; adminIpExemptDraft: boolean; setAdminIpExemptDraft: (value: boolean) => void; saveNetworkSettings: () => Promise<boolean>; checkNetwork: () => Promise<NetworkCheckResult | null>; updateEmployee: (id: string, patch: EmployeePatch) => Promise<boolean>; toggleEmployeeActive: (id: string) => Promise<boolean>; importEmployees: (rows: string[][]) => Promise<boolean>; addAttendanceRecord: (input: { employeeId: string; type: AttendanceRecord['type']; punchedAt: string }) => Promise<boolean>; updateAttendanceRecord: (id: string, patch: { type: AttendanceRecord['type']; punchedAt: string }) => Promise<boolean>; addEmployee: (input: NewEmployee) => Promise<boolean>; addDepartment: (input: DepartmentDraft) => Promise<boolean>; updateDepartment: (id: string, patch: DepartmentPatch) => Promise<boolean>; updatePassword: (accountId: string, password: string) => Promise<boolean>; saveAnnouncement: SaveAnnouncement; busyAction: BusyAction; toast: Toast | null
+  data: DemoData; accessRole: UserRole; scopeDepartmentCode?: string; now: Date; lastSyncedAt: string | null; activeView: View; setActiveView: (value: View) => void; mobileNavOpen: boolean; setMobileNavOpen: (value: boolean) => void; logout: () => void; exportAttendance: (records: DemoData['records']) => void; networkDraft: string; setNetworkDraft: (value: string) => void; networkModeDraft: NetworkMode; setNetworkModeDraft: (value: NetworkMode) => void; adminIpExemptDraft: boolean; setAdminIpExemptDraft: (value: boolean) => void; saveNetworkSettings: () => Promise<boolean>; checkNetwork: () => Promise<NetworkCheckResult | null>; updateEmployee: (id: string, patch: EmployeePatch) => Promise<boolean>; toggleEmployeeActive: (id: string) => Promise<boolean>; importEmployees: (rows: string[][]) => Promise<boolean>; addAttendanceRecord: (input: { employeeId: string; type: AttendanceRecord['type']; punchedAt: string }) => Promise<boolean>; updateAttendanceRecord: (id: string, patch: { type: AttendanceRecord['type']; punchedAt: string }) => Promise<boolean>; addEmployee: (input: NewEmployee) => Promise<boolean>; addDepartment: (input: DepartmentDraft) => Promise<boolean>; updateDepartment: (id: string, patch: DepartmentPatch) => Promise<boolean>; updatePassword: (accountId: string, password: string) => Promise<boolean>; changeOwnPassword: (currentPassword: string, newPassword: string) => Promise<void>; saveAnnouncement: SaveAnnouncement; busyAction: BusyAction; toast: Toast | null
   employee?: Employee; handlePunch: (type: 'check_in' | 'check_out') => void; punchBusy: boolean; punchFeedback: Toast | null
 }) {
-  const { data, accessRole, scopeDepartmentCode, now, lastSyncedAt, activeView, setActiveView, mobileNavOpen, setMobileNavOpen, logout, exportAttendance, networkDraft, setNetworkDraft, networkModeDraft, setNetworkModeDraft, adminIpExemptDraft, setAdminIpExemptDraft, saveNetworkSettings, checkNetwork, updateEmployee, toggleEmployeeActive, importEmployees, addAttendanceRecord, updateAttendanceRecord, addEmployee, addDepartment, updateDepartment, updatePassword, saveAnnouncement, busyAction, toast } = props
+  const { data, accessRole, scopeDepartmentCode, now, lastSyncedAt, activeView, setActiveView, mobileNavOpen, setMobileNavOpen, logout, exportAttendance, networkDraft, setNetworkDraft, networkModeDraft, setNetworkModeDraft, adminIpExemptDraft, setAdminIpExemptDraft, saveNetworkSettings, checkNetwork, updateEmployee, toggleEmployeeActive, importEmployees, addAttendanceRecord, updateAttendanceRecord, addEmployee, addDepartment, updateDepartment, updatePassword, changeOwnPassword, saveAnnouncement, busyAction, toast } = props
   const { employee, handlePunch, punchBusy, punchFeedback } = props
   const [query, setQuery] = useState('')
   const [dateFilter, setDateFilter] = useState<'today' | 'all'>('today')
@@ -718,9 +791,9 @@ function AdminShell(props: {
   const personalDidCheckIn = personalTodayRecords.some((record) => record.type === 'check_in')
   const personalDidCheckOut = personalTodayRecords.some((record) => record.type === 'check_out')
   const navItems = ([{ id: 'dashboard', label: '總覽', icon: SlidersHorizontal }, { id: 'attendance', label: accessRole === 'manager' ? '部門出勤' : '出勤紀錄', icon: CalendarDays }, { id: 'employees', label: '員工資料', icon: UsersRound }, { id: 'departments', label: '部門設定', icon: Building2 }, { id: 'settings', label: '系統設定', icon: Settings }, { id: 'announcement', label: '公告設定', icon: Megaphone }] as { id: View; label: string; icon: typeof Clock3 }[]).filter((item) => accessRole === 'admin' || accessRole === 'hr' ? true : item.id === 'dashboard' || item.id === 'attendance' || item.id === 'announcement')
-  navItems.push({ id: 'clock', label: '我的刷卡', icon: Clock3 }, { id: 'personal', label: '我的紀錄', icon: CalendarDays })
+  navItems.push({ id: 'clock', label: '我的刷卡', icon: Clock3 }, { id: 'personal', label: '我的紀錄', icon: CalendarDays }, { id: 'password', label: '修改我的密碼', icon: KeyRound })
   const viewTitle = navItems.find((item) => item.id === activeView)?.label ?? '總覽'
-  return <div className="admin-app"><header className="admin-mobile-topbar"><button type="button" className="icon-button admin-menu-toggle" onClick={() => setMobileNavOpen(!mobileNavOpen)} aria-label="管理選單" aria-expanded={mobileNavOpen} aria-controls="admin-sidebar"><Menu size={20} /><span>管理選單</span></button><div className="brand-inline"><div className="brand-mark small">K</div><span>管理者後台</span></div><button className="icon-button" onClick={logout} aria-label="登出"><LogOut size={18} /></button></header><aside id="admin-sidebar" className={`admin-sidebar ${mobileNavOpen ? 'open' : ''}`}><div className="sidebar-brand"><div className="brand-mark">K</div><div><p>DAAN KIMPTON</p><strong>員工刷卡系統</strong></div></div><div className="sidebar-meta"><span className="eyebrow">ADMIN CONSOLE</span></div><nav className="sidebar-nav">{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={activeView === id ? 'active' : ''} onClick={() => { setActiveView(id); setMobileNavOpen(false) }}><Icon size={18} /><span>{label}</span>{activeView === id && <ChevronRight size={15} className="nav-arrow" />}</button>)}</nav><div className="sidebar-bottom"><div className="admin-profile"><div className="avatar admin-avatar">A</div><div><strong>管理者</strong><small>{accessRole === 'it' ? 'IT 管理員' : accessRole === 'hr' ? '人資主管' : accessRole === 'manager' ? '部門主管' : '系統管理員'}</small></div></div><button className="sidebar-logout" onClick={logout}><LogOut size={17} />登出</button></div></aside><main className="admin-main"><div className="admin-heading"><div><p className="eyebrow">{activeView === 'dashboard' ? 'AT A GLANCE' : 'ADMIN CONSOLE'}</p><h1>{viewTitle}</h1><p className="muted">{formatTaipeiDate(now.toISOString())} · 最後成功更新 {lastSyncedAt ? formatTaipeiDateTime(lastSyncedAt) : '尚未成功更新'}</p></div><div className="heading-actions"><div className="network-summary"><span className="status-dot" />{data.network.mode === 'test' ? '未限制 IP' : 'IP 限制已啟用'}</div></div></div><nav className="personal-quick-nav" aria-label="個人快捷功能"><button type="button" className={activeView === 'clock' ? 'active' : ''} aria-current={activeView === 'clock' ? 'page' : undefined} onClick={() => setActiveView('clock')}><Clock3 size={16} />我的刷卡</button><button type="button" className={activeView === 'personal' ? 'active' : ''} aria-current={activeView === 'personal' ? 'page' : undefined} onClick={() => setActiveView('personal')}><CalendarDays size={16} />我的紀錄</button></nav>{activeView === 'announcement' && <AnnouncementPanel announcement={data.announcement} canEdit={['admin', 'hr', 'it'].includes(accessRole)} saving={busyAction !== null} onSave={saveAnnouncement} />}{activeView === 'dashboard' && <AdminDashboard data={data} todayRecords={todayRecords} activeEmployees={activeEmployees} checkedEmployeeIds={checkedEmployeeIds} onNavigate={setActiveView} accessRole={accessRole} canEditAnnouncement={['admin', 'hr', 'it'].includes(accessRole)} saveAnnouncement={saveAnnouncement} announcementBusy={busyAction !== null} />}{activeView === 'clock' && employee && <EmployeeDashboard employee={employee} data={data} now={now} lastSyncedAt={lastSyncedAt} didCheckIn={personalDidCheckIn} didCheckOut={personalDidCheckOut} handlePunch={handlePunch} punchBusy={punchBusy} punchFeedback={punchFeedback} saveAnnouncement={saveAnnouncement} canEditAnnouncement={['admin', 'hr', 'it'].includes(accessRole)} announcementBusy={busyAction !== null} />}{activeView === 'personal' && employee && <PersonalRecords records={personalRecords.slice(0, 6)} allRecords={personalRecords} exportAttendance={exportAttendance} />}{activeView === 'attendance' && <AttendanceAdmin data={data} records={visibleRecords} allScopedRecords={scopedRecords} query={query} setQuery={setQuery} dateFilter={dateFilter} setDateFilter={setDateFilter} addAttendanceRecord={addAttendanceRecord} updateAttendanceRecord={updateAttendanceRecord} canEditAttendance={accessRole === 'admin'} accessRole={accessRole} scopeDepartmentCode={scopeDepartmentCode} exportAttendance={exportAttendance} toggleEmployeeActive={toggleEmployeeActive} importEmployees={importEmployees} busyAction={busyAction} />}{activeView === 'employees' && (accessRole === 'admin' || accessRole === 'hr') && <EmployeeAdmin data={data} accessRole={accessRole} updateEmployee={updateEmployee} toggleEmployeeActive={toggleEmployeeActive} importEmployees={importEmployees} addEmployee={addEmployee} updatePassword={updatePassword} busyAction={busyAction} />}{activeView === 'departments' && (accessRole === 'admin' || accessRole === 'hr') && <DepartmentAdmin data={data} addDepartment={addDepartment} updateDepartment={updateDepartment} busyAction={busyAction} />}{activeView === 'settings' && (accessRole === 'admin' || accessRole === 'hr') && <SettingsAdmin readOnly={accessRole === 'hr'} data={data} networkDraft={networkDraft} setNetworkDraft={setNetworkDraft} networkModeDraft={networkModeDraft} setNetworkModeDraft={setNetworkModeDraft} adminIpExemptDraft={adminIpExemptDraft} setAdminIpExemptDraft={setAdminIpExemptDraft} saveNetworkSettings={saveNetworkSettings} checkNetwork={checkNetwork} updatePassword={updatePassword} busyAction={busyAction} />}</main>{toast && <ToastMessage toast={toast} />}</div>
+  return <div className="admin-app"><header className="admin-mobile-topbar"><button type="button" className="icon-button admin-menu-toggle" onClick={() => setMobileNavOpen(!mobileNavOpen)} aria-label="管理選單" aria-expanded={mobileNavOpen} aria-controls="admin-sidebar"><Menu size={20} /><span>管理選單</span></button><div className="brand-inline"><div className="brand-mark small">K</div><span>管理者後台</span></div><button className="icon-button" onClick={logout} aria-label="登出"><LogOut size={18} /></button></header><aside id="admin-sidebar" className={`admin-sidebar ${mobileNavOpen ? 'open' : ''}`}><div className="sidebar-brand"><div className="brand-mark">K</div><div><p>DAAN KIMPTON</p><strong>員工刷卡系統</strong></div></div><div className="sidebar-meta"><span className="eyebrow">ADMIN CONSOLE</span></div><nav className="sidebar-nav">{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={activeView === id ? 'active' : ''} onClick={() => { setActiveView(id); setMobileNavOpen(false) }}><Icon size={18} /><span>{label}</span>{activeView === id && <ChevronRight size={15} className="nav-arrow" />}</button>)}</nav><div className="sidebar-bottom"><div className="admin-profile"><div className="avatar admin-avatar">A</div><div><strong>管理者</strong><small>{accessRole === 'it' ? 'IT 管理員' : accessRole === 'hr' ? '人資主管' : accessRole === 'manager' ? '部門主管' : '系統管理員'}</small></div></div><button className="sidebar-logout" onClick={logout}><LogOut size={17} />登出</button></div></aside><main className="admin-main"><div className="admin-heading"><div><p className="eyebrow">{activeView === 'dashboard' ? 'AT A GLANCE' : 'ADMIN CONSOLE'}</p><h1>{viewTitle}</h1><p className="muted">{formatTaipeiDate(now.toISOString())} · 最後成功更新 {lastSyncedAt ? formatTaipeiDateTime(lastSyncedAt) : '尚未成功更新'}</p></div><div className="heading-actions"><div className="network-summary"><span className="status-dot" />{data.network.mode === 'test' ? '未限制 IP' : 'IP 限制已啟用'}</div></div></div><nav className="personal-quick-nav" aria-label="個人快捷功能"><button type="button" className={activeView === 'clock' ? 'active' : ''} aria-current={activeView === 'clock' ? 'page' : undefined} onClick={() => setActiveView('clock')}><Clock3 size={16} />我的刷卡</button><button type="button" className={activeView === 'personal' ? 'active' : ''} aria-current={activeView === 'personal' ? 'page' : undefined} onClick={() => setActiveView('personal')}><CalendarDays size={16} />我的紀錄</button><button type="button" className={activeView === 'password' ? 'active' : ''} aria-current={activeView === 'password' ? 'page' : undefined} onClick={() => setActiveView('password')}><KeyRound size={16} />修改我的密碼</button></nav>{activeView === 'announcement' && <AnnouncementPanel announcement={data.announcement} canEdit={['admin', 'hr', 'it'].includes(accessRole)} saving={busyAction !== null} onSave={saveAnnouncement} />}{activeView === 'dashboard' && <AdminDashboard data={data} todayRecords={todayRecords} activeEmployees={activeEmployees} checkedEmployeeIds={checkedEmployeeIds} onNavigate={setActiveView} accessRole={accessRole} canEditAnnouncement={['admin', 'hr', 'it'].includes(accessRole)} saveAnnouncement={saveAnnouncement} announcementBusy={busyAction !== null} />}{activeView === 'clock' && employee && <EmployeeDashboard employee={employee} data={data} now={now} lastSyncedAt={lastSyncedAt} didCheckIn={personalDidCheckIn} didCheckOut={personalDidCheckOut} handlePunch={handlePunch} punchBusy={punchBusy} punchFeedback={punchFeedback} saveAnnouncement={saveAnnouncement} canEditAnnouncement={['admin', 'hr', 'it'].includes(accessRole)} announcementBusy={busyAction !== null} />}{activeView === 'personal' && employee && <PersonalRecords records={personalRecords.slice(0, 6)} allRecords={personalRecords} exportAttendance={exportAttendance} />}{activeView === 'attendance' && <AttendanceAdmin data={data} records={visibleRecords} allScopedRecords={scopedRecords} query={query} setQuery={setQuery} dateFilter={dateFilter} setDateFilter={setDateFilter} addAttendanceRecord={addAttendanceRecord} updateAttendanceRecord={updateAttendanceRecord} canEditAttendance={accessRole === 'admin'} accessRole={accessRole} scopeDepartmentCode={scopeDepartmentCode} exportAttendance={exportAttendance} toggleEmployeeActive={toggleEmployeeActive} importEmployees={importEmployees} busyAction={busyAction} />}{activeView === 'employees' && (accessRole === 'admin' || accessRole === 'hr') && <EmployeeAdmin data={data} accessRole={accessRole} updateEmployee={updateEmployee} toggleEmployeeActive={toggleEmployeeActive} importEmployees={importEmployees} addEmployee={addEmployee} updatePassword={updatePassword} busyAction={busyAction} />}{activeView === 'departments' && (accessRole === 'admin' || accessRole === 'hr') && <DepartmentAdmin data={data} addDepartment={addDepartment} updateDepartment={updateDepartment} busyAction={busyAction} />}{activeView === 'settings' && (accessRole === 'admin' || accessRole === 'hr') && <SettingsAdmin readOnly={accessRole === 'hr'} data={data} networkDraft={networkDraft} setNetworkDraft={setNetworkDraft} networkModeDraft={networkModeDraft} setNetworkModeDraft={setNetworkModeDraft} adminIpExemptDraft={adminIpExemptDraft} setAdminIpExemptDraft={setAdminIpExemptDraft} saveNetworkSettings={saveNetworkSettings} checkNetwork={checkNetwork} updatePassword={updatePassword} busyAction={busyAction} />}{activeView === 'password' && employee && <ChangePasswordPanel key={employee.id} onChangePassword={changeOwnPassword} busy={busyAction !== null} />}</main>{toast && <ToastMessage toast={toast} />}</div>
 }
 
 function AdminDashboard({ data, todayRecords, activeEmployees, checkedEmployeeIds, onNavigate, accessRole, canEditAnnouncement, saveAnnouncement, announcementBusy }: { data: DemoData; todayRecords: DemoData['records']; activeEmployees: Employee[]; checkedEmployeeIds: Set<string>; onNavigate: (view: View) => void; accessRole: UserRole; canEditAnnouncement: boolean; saveAnnouncement: SaveAnnouncement; announcementBusy: boolean }) {
@@ -853,7 +926,7 @@ function EmployeeAdmin({ data, accessRole, updateEmployee, toggleEmployeeActive,
       </> : <>
         <td><span className="code-label">{employee.employeeNo}</span></td><td><strong>{employee.name}</strong></td><td>{employee.department}</td><td>{employee.title}</td><td>{employeeRoleLabel(employee.accessRole)}</td>
         <td><button className={`table-action-button ${employee.active ? '' : 'danger-button'}`} onClick={() => void toggleEmployeeActive(employee.id)} disabled={busyAction !== null}>{employee.active ? '啟用中' : '已停用'}</button></td>
-        <td><div className="row-actions"><button className="table-action-button" onClick={() => beginEmployeeEdit(employee)} disabled={busyAction !== null}><Pencil size={14} />修改</button>{accessRole === 'admin' && <button className="table-action-button" onClick={() => { setPasswordEmployeeId(passwordEmployeeId === employee.id ? null : employee.id); setPasswordDraft('') }} disabled={busyAction !== null}><KeyRound size={14} />重設密碼</button>}</div>{passwordEmployeeId === employee.id && accessRole === 'admin' && <div className="inline-password"><input type="password" value={passwordDraft} onChange={(event) => setPasswordDraft(event.target.value)} placeholder="至少 6 碼" /><button className="small-save" onClick={async () => { if (await updatePassword(employee.id, passwordDraft)) { setPasswordEmployeeId(null); setPasswordDraft('') } }} disabled={busyAction !== null}>儲存</button></div>}</td>
+        <td><div className="row-actions"><button className="table-action-button" onClick={() => beginEmployeeEdit(employee)} disabled={busyAction !== null}><Pencil size={14} />修改</button>{accessRole === 'admin' && <button className="table-action-button" onClick={() => { setPasswordEmployeeId(passwordEmployeeId === employee.id ? null : employee.id); setPasswordDraft('') }} disabled={busyAction !== null}><KeyRound size={14} />重設密碼</button>}</div>{passwordEmployeeId === employee.id && accessRole === 'admin' && <div className="inline-password"><input type="password" value={passwordDraft} onChange={(event) => setPasswordDraft(event.target.value)} placeholder="至少 8 碼，最多 128 碼" /><button className="small-save" onClick={async () => { if (await updatePassword(employee.id, passwordDraft)) { setPasswordEmployeeId(null); setPasswordDraft('') } }} disabled={busyAction !== null}>儲存</button></div>}</td>
       </>}</tr>
     })}</tbody></table></div>
   </section>
@@ -945,7 +1018,7 @@ function SettingsAdmin({ data, readOnly, networkDraft, setNetworkDraft, networkM
 
   return <div className="settings-grid"><section className="content-card settings-card"><div className="card-heading"><div><p className="eyebrow">NETWORK ACCESS</p><h2>公司網路限制</h2><p className="muted">正式串接後，打卡請求會由伺服器檢查來源公網 IP，支援 IP、CIDR 與 IPv6 網段。</p></div><div className={`large-status ${data.network.mode === 'test' ? 'test' : 'strict'}`}>{data.network.mode === 'test' ? <CircleAlert size={20} /> : <ShieldCheck size={20} />}<span>{data.network.mode === 'test' ? '未限制 IP' : 'IP 限制已啟用'}</span></div></div><div className="mode-choice"><button type="button" className={networkModeDraft === 'test' ? 'selected' : ''} disabled={readOnly || busyAction !== null} onClick={() => setNetworkModeDraft('test')}><div className="choice-radio" /><div><strong>未限制 IP</strong><small>暫不限制來源網路，方便流程調校。</small></div></button><button type="button" className={networkModeDraft === 'strict' ? 'selected' : ''} disabled={readOnly || busyAction !== null} onClick={() => setNetworkModeDraft('strict')}><div className="choice-radio" /><div><strong>正式 IP 模式</strong><small>只允許下方列出的 IP、CIDR 或 IPv6 網段打卡。</small></div></button></div><label className="settings-label"><span>允許的 IP／CIDR／IPv6 網段</span><textarea rows={4} value={networkDraft} disabled={readOnly || busyAction !== null} onChange={(event) => setNetworkDraft(event.target.value)} placeholder="例如：203.0.113.25
 2001:db8::/32
-每行一組，也可用逗號分隔" /></label><label className="settings-checkbox"><input type="checkbox" checked={adminIpExemptDraft} disabled={readOnly || busyAction !== null} onChange={(event) => setAdminIpExemptDraft(event.target.checked)} /><span>ADMIN 帳號刷卡可略過 IP 檢查</span></label><p className="settings-note">僅 admin 可修改此設定；HR 僅可檢視。只對後端指定的 ADMIN 帳號 UUID 生效；其他 Admin 角色不會自動例外。登入、查詢與下載不受 IP 限制，只有刷卡會檢查。</p><div className="settings-hint"><Globe2 size={17} /><div><strong>目前儲存狀態</strong><span>{savedNetworkSummary}</span></div></div><div className="network-check-panel"><div className="network-check-heading"><div><strong>目前網路檢查</strong><span>由伺服器判定可信公網 IP 與本帳號刷卡權限。</span></div><button type="button" className="secondary-button" onClick={() => void inspectNetwork()} disabled={busyAction !== null}><Network size={16} />檢查目前網路</button></div>{networkCheck ? <div className={`network-check-result ${networkCheck.canPunch ? 'allowed' : 'denied'}`}><div><span>可信公網 IP</span><strong>{networkCheck.observedIp ?? '無法取得'}</strong></div><div><span>刷卡結果</span><strong>{networkCheck.canPunch ? '允許刷卡' : '拒絕刷卡'}</strong></div><div><span>ADMIN 例外</span><strong>{networkCheck.adminExempt ? '是，本帳號適用' : '否，本帳號不適用'}</strong></div><div><span>伺服器模式</span><strong>{networkCheck.mode === 'test' ? '未限制 IP' : '正式 IP 模式'}</strong></div></div> : <p className="network-check-empty">尚未檢查；按下按鈕後顯示目前可信公網 IP、刷卡允許／拒絕與 ADMIN 例外狀態。</p>}</div><div className="form-actions">{!readOnly && <button className="primary-button" onClick={() => void saveNetworkSettings()} disabled={busyAction !== null}><Check size={16} />儲存網路設定</button>}</div></section><section className="content-card settings-card secondary-settings"><div className="card-heading"><div><p className="eyebrow">ACCOUNT SECURITY</p><h2>管理者密碼</h2><p className="muted">只有 admin 可重設 admin 或指定員工的雲端密碼。</p></div><KeyRound size={21} /></div>{!readOnly && <><label className="settings-label"><span>設定 ADMIN 新密碼</span><input className="settings-password-input" type="password" value={adminPasswordDraft} onChange={(event) => setAdminPasswordDraft(event.target.value)} placeholder="至少 6 個字元" /></label><button className="primary-button settings-save-button" onClick={async () => { if (await updatePassword('admin', adminPasswordDraft)) setAdminPasswordDraft('') }} disabled={busyAction !== null}><KeyRound size={15} />儲存管理者密碼</button></>}<div className="card-heading connection-heading"><div><p className="eyebrow">SUPABASE CONNECTION</p><h2>資料服務狀態</h2></div><div className={`connection-dot ${supabaseReady ? 'ready' : ''}`} /></div><div className="connection-row"><span>前端連線</span><strong>{supabaseReady ? '已偵測環境變數' : '尚未設定 Supabase Key'}</strong></div><div className="connection-row"><span>目前資料層</span><strong>Supabase 雲端</strong></div><p className="settings-copy">正式登入、員工、部門、出勤與網路設定都使用 Supabase 雲端；本頁不提供本機預覽資料備份或重設。</p></section></div>
+每行一組，也可用逗號分隔" /></label><label className="settings-checkbox"><input type="checkbox" checked={adminIpExemptDraft} disabled={readOnly || busyAction !== null} onChange={(event) => setAdminIpExemptDraft(event.target.checked)} /><span>ADMIN 帳號刷卡可略過 IP 檢查</span></label><p className="settings-note">僅 admin 可修改此設定；HR 僅可檢視。只對後端指定的 ADMIN 帳號 UUID 生效；其他 Admin 角色不會自動例外。登入、查詢與下載不受 IP 限制，只有刷卡會檢查。</p><div className="settings-hint"><Globe2 size={17} /><div><strong>目前儲存狀態</strong><span>{savedNetworkSummary}</span></div></div><div className="network-check-panel"><div className="network-check-heading"><div><strong>目前網路檢查</strong><span>由伺服器判定可信公網 IP 與本帳號刷卡權限。</span></div><button type="button" className="secondary-button" onClick={() => void inspectNetwork()} disabled={busyAction !== null}><Network size={16} />檢查目前網路</button></div>{networkCheck ? <div className={`network-check-result ${networkCheck.canPunch ? 'allowed' : 'denied'}`}><div><span>可信公網 IP</span><strong>{networkCheck.observedIp ?? '無法取得'}</strong></div><div><span>刷卡結果</span><strong>{networkCheck.canPunch ? '允許刷卡' : '拒絕刷卡'}</strong></div><div><span>ADMIN 例外</span><strong>{networkCheck.adminExempt ? '是，本帳號適用' : '否，本帳號不適用'}</strong></div><div><span>伺服器模式</span><strong>{networkCheck.mode === 'test' ? '未限制 IP' : '正式 IP 模式'}</strong></div></div> : <p className="network-check-empty">尚未檢查；按下按鈕後顯示目前可信公網 IP、刷卡允許／拒絕與 ADMIN 例外狀態。</p>}</div><div className="form-actions">{!readOnly && <button className="primary-button" onClick={() => void saveNetworkSettings()} disabled={busyAction !== null}><Check size={16} />儲存網路設定</button>}</div></section><section className="content-card settings-card secondary-settings"><div className="card-heading"><div><p className="eyebrow">ACCOUNT SECURITY</p><h2>管理者密碼</h2><p className="muted">只有 admin 可重設 admin 或指定員工的雲端密碼。</p></div><KeyRound size={21} /></div>{!readOnly && <><label className="settings-label"><span>設定 ADMIN 新密碼</span><input className="settings-password-input" type="password" value={adminPasswordDraft} onChange={(event) => setAdminPasswordDraft(event.target.value)} placeholder="至少 8 個字元，最多 128 個字元" /></label><button className="primary-button settings-save-button" onClick={async () => { if (await updatePassword('admin', adminPasswordDraft)) setAdminPasswordDraft('') }} disabled={busyAction !== null}><KeyRound size={15} />儲存管理者密碼</button></>}<div className="card-heading connection-heading"><div><p className="eyebrow">SUPABASE CONNECTION</p><h2>資料服務狀態</h2></div><div className={`connection-dot ${supabaseReady ? 'ready' : ''}`} /></div><div className="connection-row"><span>前端連線</span><strong>{supabaseReady ? '已偵測環境變數' : '尚未設定 Supabase Key'}</strong></div><div className="connection-row"><span>目前資料層</span><strong>Supabase 雲端</strong></div><p className="settings-copy">正式登入、員工、部門、出勤與網路設定都使用 Supabase 雲端；本頁不提供本機預覽資料備份或重設。</p></section></div>
 }
 function EmptyState({ title, detail }: { title: string; detail: string }) { return <div className="empty-state"><div className="empty-icon"><FileSpreadsheet size={20} /></div><strong>{title}</strong><span>{detail}</span></div> }
 function ToastMessage({ toast }: { toast: Toast }) { return <div className={`toast ${toast.tone}`}><span className="toast-icon">{toast.tone === 'success' ? <Check size={15} /> : toast.tone === 'error' ? <X size={15} /> : <CircleAlert size={15} />}</span>{toast.message}</div> }

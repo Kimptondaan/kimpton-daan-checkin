@@ -526,3 +526,35 @@ button { min-height: 40px; }
   letter-spacing: 0;
   white-space: nowrap;
 }
+
+/* Self-service password change: paper-like security card with touch-first fields */
+.password-panel { max-width: 760px; margin: 42px auto 0; padding: 27px 30px; }
+.password-panel-heading { align-items: center; }
+.password-panel-heading > svg { flex: 0 0 auto; color: var(--copper); }
+.change-password-form { display: grid; gap: 19px; margin-top: 24px; }
+.password-field { display: grid; gap: 8px; color: var(--green); font-size: 12px; font-weight: 700; }
+.password-field input { width: 100%; min-width: 0; min-height: 50px; border: 1px solid var(--line); border-radius: 2px; outline: 0; padding: 11px 13px; color: var(--ink); background: #fffdf9; font-size: 16px; line-height: 1.5; }
+.password-field input:focus { border-color: var(--copper); box-shadow: 0 0 0 2px rgba(183,112,75,.12); }
+.password-field input:disabled { opacity: .68; }
+.password-policy-note { margin: -2px 0 0; color: var(--muted); font-size: 11px; line-height: 1.75; }
+.password-progress, .password-message { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 11px 13px; border: 1px solid var(--line); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.password-progress { color: #8f6d59; background: #f7eee6; }
+.password-message.error { border-color: #e0c4bd; color: var(--danger); background: #fbefeb; }
+.password-message.success { border-color: #c7dbc9; color: var(--green-2); background: #f0f7f0; }
+.password-message.success svg { flex: 0 0 auto; margin-top: 2px; }
+.password-form-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 2px; }
+.password-form-actions button { min-height: 46px; }
+.password-submit-button:disabled { opacity: .62; }
+@media (max-width: 680px) {
+  .password-panel { margin-top: 30px; padding: 22px 17px; }
+  .password-panel-heading { display: flex !important; }
+  .change-password-form { gap: 17px; margin-top: 20px; }
+  .password-form-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .password-form-actions button { width: 100%; padding-left: 9px; padding-right: 9px; font-size: 11px; }
+}
+.login-notice { margin: 0; padding: 12px 14px; border: 1px solid #c7dbc9; color: var(--green-2); background: #f0f7f0; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+@media (max-width: 680px) {
+  .mobile-employee-nav { display: flex; flex-wrap: wrap; }
+  .mobile-employee-nav button { flex: 1 1 145px; min-width: 0; white-space: normal; line-height: 1.4; }
+  .mobile-employee-nav button svg { flex: 0 0 auto; }
+}
