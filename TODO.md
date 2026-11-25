@@ -182,5 +182,5 @@
 
 - [x] 登入後把「我的刷卡」改成登入使用者姓名加「的刷卡」；例如 240428 登入後顯示 `Tony.Chou的刷卡`。一般員工與 Admin／HR／IT／部門主管的個人刷卡頁主標題、手機及桌面相關入口均取自目前登入者姓名，不硬編碼員工編號或姓名，不改原有權限與刷卡行為。
 - [x] `pnpm run build`、差異空白檢查與 15 組五角色／英文／中文／HTML 特殊字元的實際頁面外框 SSR 渲染測試通過；不連線讀寫正式資料，姓名採 React 純文字輸出。
-- [ ] GitHub 連線授權已失效，待重新授權後同步本次版本至 `Kimptondaan/kimpton-daan-checkin`。
-- [ ] Netlify 發布回傳 `401 Unauthorized`；修復驗證相容性設定後重試仍失敗，待重新授權後發布既有站點。正式站仍為原版本，不得宣稱本次修改已上線。姓名標題程式已保存於 Manus 版本 `86681f4`。
+- [x] GitHub 登入恢復後，已將本次程式與驗證測試快轉推送至 `Kimptondaan/kimpton-daan-checkin` 的 `main`（最終 commit `203c11e`；功能程式碼 commit `86681f4`）。
+- [x] Netlify 生產環境自動發布 `main@203c11e` 完成並標記 Published（23 秒）；正式網址首頁確認可載入：`https://lambent-chimera-9ae4a2.netlify.app/`。
